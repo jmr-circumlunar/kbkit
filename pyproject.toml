@@ -8,8 +8,6 @@ version = "0.1.0"
 description = "Local, agent-oriented Markdown knowledge-base toolkit"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
-authors = [{ name = "kbkit contributors" }]
 dependencies = []
 
 [project.scripts]
