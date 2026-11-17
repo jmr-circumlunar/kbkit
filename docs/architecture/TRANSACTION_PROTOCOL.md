@@ -75,3 +75,20 @@
 ## 8. 错误契约
 
 写入返回错误不能证明回滚已发生。必须区分 rolled_back、partially_applied、unknown、completed_with_index_dirty 等结果；不确定时明确告知目标路径和恢复动作，不能说“已回滚”。
+
+
+## 9. Windows 官方 API 核验补充
+
+截至 2026-11-17，已核对 Microsoft 官方资料：
+
+- ReplaceFileW 是单文件替换函数；替换文件、原文件和可选备份必须位于同一卷。
+- ReplaceFileW 的 REPLACEFILE_WRITE_THROUGH 标志官方明确标记为“不支持”。
+- FlushFileBuffers 刷新指定文件句柄的缓冲数据；官方说明刷新整个卷需要卷句柄和管理员权限。
+- 因此，不能把 POSIX 的“文件 fsync + 父目录 fsync”未经验证地等价移植到 Windows，也不能把 ReplaceFileW 视作多文件原子事务。
+
+官方资料：
+- ReplaceFileW：https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-replacefilew
+- FlushFileBuffers：https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers
+- Moving and Replacing Files：https://learn.microsoft.com/en-us/windows/win32/fileio/moving-and-replacing-files
+
+结论：E2 必须在真实 Windows 本地磁盘上验证 staging 同卷、文件句柄占用、ReplaceFileW/os.replace 行为、FlushFileBuffers、journal 恢复和再次崩溃。验证前不承诺断电级 durability。

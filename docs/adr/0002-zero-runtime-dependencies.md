@@ -24,3 +24,12 @@
 ## 验证
 
 干净 venv 依赖审计、断网流程、MCP 客户端互操作、模型端点超时和错误降级。
+
+
+## MCP 传输补充
+
+MCP 官方规范将 stdio 与 Streamable HTTP 列为标准传输。stdio 由客户端启动服务子进程，JSON-RPC 消息经 stdin/stdout 传递；服务不得向 stdout 输出非协议文本，日志可写 stderr。
+
+官方规范（2026-07-28）：https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2026-07-28/basic/transports/index.mdx
+
+因此，首发只做 stdio 是可行的范围控制提案；这并不等于“随便实现 JSON-RPC 就算 MCP”。必须固定协议版本，覆盖 initialize、capabilities、tools/list、tools/call、错误、取消和客户端互操作。Streamable HTTP 作为后续独立决策，不与 Web Viewer 混淆。

@@ -45,3 +45,10 @@
 ## 当前阶段
 
 E0 远程仓库骨架已建立；Windows 本地环境尚未验收。当前处于 E1 规划与架构契约阶段。不得把占位 CLI、基础测试或已有 M0 汇总数据描述为完整产品能力。
+
+
+## 项目状态与测试资料
+
+- 当前进展：PROJECT_STATUS.md
+- 测试数据与 Fixture 规范：quality/TEST_FIXTURES.md
+- 需求追踪矩阵：requirements/TRACEABILITY.md

@@ -33,3 +33,22 @@
 - 对应 ADR、需求和测试 ID。
 
 不能只记录“某文章说过”。V3 来源只能作为线索，关键决策必须补 V1 或 V2。
+
+
+## 4. 已核验的一手技术资料（2026-11-17）
+
+| 主题 | 一手资料 | 已核验事实 | 对 kbkit 的影响 |
+|---|---|---|---|
+| SQLite FTS5 tokenizer | https://www.sqlite.org/fts5.html | unicode61 将连续 token 字符作为一个 token；tokenchars 可把下划线等字符纳入 token；trigram 全文查询少于 3 个 Unicode 字符不匹配 | 支持中文 bigram 应用层预处理和标识符 tokenchars 的技术方向；短词需单独测试 |
+| SQLite 编译选项 | https://www.sqlite.org/compile.html | FTS5 可由 SQLITE_ENABLE_FTS5 编译选项启用 | 不能只假设标准库 sqlite3 一定包含 FTS5；运行时必须探测 |
+| MCP 标准传输 | https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2026-07-28/basic/transports/index.mdx | 标准传输包括 stdio 与 Streamable HTTP；stdio 由客户端启动子进程，通过 stdin/stdout 传递 JSON-RPC | 首发可评估 stdio；必须遵守 stdout 仅输出协议消息，日志写 stderr |
+| Python zipapp | https://docs.python.org/3/library/zipapp.html | zipapp 需要目标机器有适当 Python 解释器；Windows 安装 Python 后可通过 .pyz/.pyzw 文件关联执行；含 C 扩展的包不能直接从 zip 文件加载 | 原始资料中“Windows 必须 python3.dll 在 PATH”不是官方文档列出的通用前提，需确认其特定运行场景；kbkit 应以标准库为核心 |
+| Windows ReplaceFileW | https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-replacefilew | 单文件替换 API；被替换文件、替换文件和备份文件必须同卷；REPLACEFILE_WRITE_THROUGH 不受支持 | 同卷 staging 是必要约束；不能把单文件 API 当多文件事务；不能依赖该 flag 宣称写穿 |
+| Windows FlushFileBuffers | https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers | 刷新指定文件句柄的缓冲数据；刷整个卷需要卷句柄和管理员权限 | 不能从“文件句柄 flush 成功”推断父目录元数据已持久化；目录耐久性需单独验证 |
+
+## 5. 仍需验证的证据
+
+- Windows 文件系统在进程崩溃、系统崩溃和断电三种故障级别下的真实保证。
+- Python/SQLite 目标发行版的 FTS5 构建状态。
+- MCP 2026-07-28 规范与目标客户端的兼容矩阵。
+- zipapp 在干净 Windows 安装环境中的启动行为。

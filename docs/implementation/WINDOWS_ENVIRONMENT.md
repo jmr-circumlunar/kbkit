@@ -49,3 +49,14 @@ doctor 应检测 SQLite FTS5，而不是仅打印 SQLite 版本。
 ## 6. 本地验收状态
 
 远程仓库文件已创建并复核；本机 Python/Git 安装、venv、单元测试和推送尚未由本会话执行。用户本机运行以上命令后，需把实际输出作为 E0 验收记录，不应预先标记通过。
+
+
+## 7. 远程 CI 验证记录
+
+2026-11-17，GitHub Actions 的当前工程骨架 CI 已完成并通过 6 个 job：
+- Windows：Python 3.11、3.12、3.13；
+- Ubuntu：Python 3.11、3.12、3.13。
+
+运行记录：https://github.com/jmr-circumlunar/kbkit/actions/runs/44033244379
+
+这只验证当前占位包、基础单元测试和 doctor 命令，不代表用户本机环境已经验收，也不代表尚未实现的知识库功能已经通过测试。
