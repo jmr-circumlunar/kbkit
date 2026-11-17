@@ -192,3 +192,20 @@
 | SEC-007 | P0 | 未配置模型端点时运行全流程 | 无外部网络请求 |
 | SEC-008 | P0 | vault 内 junction/symlink 在扫描后被替换 | 写前再次校验，阻止越界写入 |
 | PKG-003 | P1 | 通过 python -m kbkit 运行 zipapp | 在声明的 Python 环境执行成功；不假设系统 PATH 中有 python3.dll |
+
+
+## 数据搬运、编辑器兼容与端到端用例
+
+| ID | 优先级 | 场景 | 预期 |
+|---|---|---|---|
+| PORT-001 | P0 | 将完整 vault 复制到新路径后重建索引 | 内容 hash 与同一查询的结果定位一致 |
+| PORT-002 | P0 | 两个不同路径出现相同 vault_uuid | 明确提示移动/复制冲突，不自动串用索引 |
+| EDITOR-001 | P1 | 用 Obsidian、VS Code 或 Typora 打开样例 vault | 文件可正常显示；kbkit 不要求插件或专有 API |
+| E2E-001 | P0 | 断网且本地 Git 可用：init→index→search→read→write→lint→commit | 全链路成功，提交只发生在绑定的用户 vault |
+| E2E-002 | P0 | 不安装 Git：init→index→search→read→write→lint | 核心链路成功，Git 能力报告 unavailable |
+| E2E-003 | P0 | 通过 MCP 完成 search/read/write/graph/lint/status | 与 CLI/Python API 返回相同业务结果和错误语义 |
+| E2E-004 | P0 | 写入过程中 kill 后重启并 doctor/recover | 恢复报告与文件 hash、journal、index_dirty 一致 |
+| GIT-005 | P0 | 同时存在 kbkit 研发仓库和用户 vault Git | 所有 gitx 操作只影响显式绑定的用户 vault |
+| MCP-006 | P0 | CLI/Python/MCP schema 一致性检查 | 参数、错误码和结果字段来自同一契约定义 |
+| SEC-009 | P0 | Markdown、路径或参数中包含 shell 元字符 | 不触发 shell 执行或任意命令 |
+| PKG-004 | P1 | 用显式 Python 解释器启动 kbkit.pyz | 无文件关联时仍可用 python kbkit.pyz 启动 |

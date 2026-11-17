@@ -52,3 +52,9 @@ E0 远程仓库骨架已建立；Windows 本地环境尚未验收。当前处于
 - 当前进展：PROJECT_STATUS.md
 - 测试数据与 Fixture 规范：quality/TEST_FIXTURES.md
 - 需求追踪矩阵：requirements/TRACEABILITY.md
+
+
+### 数据模型与追踪
+
+- 数据模型：architecture/DATA_MODEL.md
+- 需求—模块—测试追踪：requirements/TRACEABILITY.md
