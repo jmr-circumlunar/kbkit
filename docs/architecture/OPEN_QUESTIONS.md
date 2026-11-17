@@ -1,48 +1,48 @@
-# Architecture Questions Requiring Decisions
+# 架构待决事项
 
-These questions are deliberately left open in the bootstrap repository. They must be resolved with focused prototypes and ADRs before the corresponding implementation phase.
+状态：E1 决策清单。解决后必须更新对应 ADR 和需求/测试追踪。
 
-## A. Product and runtime boundaries
+## 产品与平台
 
-1. Is the built-in local web viewer actually in scope? The overview diagram includes one, while the interface summary says the view layer is fully delegated to third-party editors and that kbkit provides no rendering layer. Choose one consistent product boundary.
-2. Which MCP transport and protocol version are targeted? A standards-compliant MCP server may require an optional SDK or a separately maintained adapter; reconcile this with the zero-third-party-dependency acceptance criterion.
-3. Is Python 3.11+ the supported baseline, or should the package target a wider range? Confirm against the intended deployment environments.
+1. Python 最低支持版本最终定为 3.11、3.12 还是其他版本？
+2. Windows 是否为唯一首发正式平台？Linux/macOS 的支持承诺是什么？
+3. 用户知识库 Git 是否始终可选？自动提交的默认策略和权限如何设置？
+4. 组件对外授权协议/License 是什么？公开仓库当前尚无已确认 License。
 
-## B. Storage and indexing
+## 模块与接口
 
-4. Where does the external index live on each supported OS, and how is a vault identity derived without path collisions or accidental cross-user leakage?
-5. How are multiple processes coordinated when the index is external to the vault? Define locking, stale detection, crash recovery, and rebuild behavior.
-6. What is the exact block identity contract? Define stable IDs, duplicate headings, block moves, heading edits, and fallback selectors.
-7. What tokenizer contract is used for Chinese bigrams, ASCII identifiers, punctuation, mixed-language text, and query normalization? How are phrase, AND/OR, and identifier matching represented?
+5. 原始 36 个模块的完整名称、编号和变更影响矩阵在哪里？本仓库 MODULE_MAP 是候选草案，需对照原始 DESIGN/CAPABILITIES。
+6. MCP 首发只做 stdio，还是还需要 Streamable HTTP？协议版本和客户端兼容矩阵是什么？
+7. MCP ≤8 工具的最终分组和名称是什么？
+8. Python API 的稳定性、同步/异步、异常和资源生命周期如何定义？
+9. 原始 I1–I8 中 I8 缺失，是否存在遗漏判据？
 
-## C. Markdown compatibility
+## Markdown 与索引
 
-8. Which frontmatter YAML subset is accepted? Define quoting, lists, nested maps, booleans, nulls, dates, duplicate keys, invalid YAML, line endings, and byte-preserving edits.
-9. How are wikilinks, aliases, headings, block IDs, embeds, callouts, tags, and escaped syntax parsed and round-tripped?
-10. How are symlinks, path traversal, case sensitivity, Unicode normalization, and files changing during a read handled?
+10. Frontmatter YAML 子集精确语法是什么？重复 key、锚点、别名、多行标量如何处理？
+11. block_id 在标题改名、移动、拆分、合并和重复标题下如何保持身份？
+12. 中文 bigram 对单字查询、停用词、标点和中英混合的规则是什么？
+13. %APPDATA% 与 %LOCALAPPDATA% 哪个存放外置索引？vault_uuid 冲突怎么处理？
+14. 索引 schema 升级失败时的回滚/重建策略是什么？
 
-## D. Write consistency and recovery
+## 写入与事务
 
-11. The proposed multi-file redo journal is a recoverable sequence of replacements, not a globally atomic filesystem transaction. Which visibility guarantee is promised to concurrent readers?
-12. How are writer locks acquired and released across process crashes? What happens if a user/editor modifies a target during recovery?
-13. What are the exact journal state transitions, fsync policy, Windows durability behavior, and recovery idempotency rules?
-14. Which data belongs in the journal, snapshots, Git, and the external index? Define retention, privacy, and cleanup rules.
-15. Does a failed index update leave correct source content committed with an explicit dirty marker, or is the user operation considered incomplete? Define API response semantics.
+15. Windows 的文件锁、replace、flush 和目录元数据耐久性可以保证到什么级别？
+16. kbkit API 读者如何避免在多文件事务应用中读到混合状态？
+17. 第三方编辑器在事务期间修改文件时，divergent 的人工解决流程是什么？
+18. journal、snapshot、trash 的保留期和清理授权是什么？
+19. Git commit 失败、索引失败、写后断言失败的最终 API 状态码分别是什么？
 
-## E. Git, automation, and security
+## 检索、治理与自动化
 
-16. Is Git optional for normal use, and which operations require a repository?
-17. How are credentials, hooks, unsafe Git configuration, and untrusted repositories handled?
-18. Which scheduled-task mechanisms are supported on Windows/Linux, and how are duplicate jobs, missed runs, logs, and uninstall handled?
-19. What is the permission model for private/internal/public content, and where are secrets excluded from indexing and model calls?
+20. L1 的 N≤5 与 L2 的 N>10 之间 N=6–10 如何处理？
+21. Hit@5 0.8 是否采用？需要自己的 golden set 基线和一手依据。
+22. state 缺失时默认如何处理？默认检索是否只含 active？
+23. visibility 是过滤标签，不是强访问控制；是否需要额外的权限模型？
+24. TTL/pinning 的字段、默认期限和复核规则是什么？
+25. 12 条 lint 规则的精确定义、严重度、自动修复动作和测试样本是什么？
+26. 计划任务首发只支持 Windows Task Scheduler 吗？漏执行、重复安装和卸载如何处理？
 
-## F. Distribution and acceptance
+## 原始资料缺口
 
-20. Is pip the primary distribution? Is zipapp a supported promise or an experimental target? Clarify the build-time dependency and native DLL constraints.
-21. Which MCP/client compatibility matrix is required?
-22. Publish golden retrieval datasets, relevance labels, metric definitions, benchmark hardware, and reproducibility instructions before claiming Hit@K/MRR or latency targets.
-23. Define backup/restore acceptance and fault-injection cases per operating system.
-
-## Initial recommendation
-
-Do not block the bootstrap repository on all answers. Keep interfaces small, write ADRs when a decision affects persisted formats or public APIs, and prototype high-risk assumptions before implementing the full module inventory.
+本轮只收到 00-总述、01-重点拆分与逐点思考、02-初始化底座与目录构筑三份文件。原文提及的 DESIGN.md、CAPABILITIES.md、FOCUS.md、SYNC.md 未随本轮提供。待取得后必须对照模块清单、CLI 命令表、影响矩阵、同步方案和引用依据，不能假设本轮摘要覆盖了全部细节。
