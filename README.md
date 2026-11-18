@@ -29,5 +29,6 @@ python -m venv .venv
 - 检索前同步检测到的 Markdown 变动。定时维护补做内容哈希核验、链接和 lint 检查。
 - `knowledge review` 保存设计等知识页的已复核版本和显式依赖。关联依据变化、缺失或失效时，下游从默认检索退出。`knowledge history` 可读取先前复核版。
 - `knowledge bind-code` 绑定授权的本地 Git ref 和路径。维护任务按提交自动更新对应的实现索引页，并保留来源 SHA、文件路径和 Python 顶层符号。代码正文保留在仓库。普通笔记的结论由 Agent 对照变更后更新并复核。
+- 移动已注册的知识库后，用 `kbc add <path> --identity moved` 保留身份。需要同时保留源库和副本时，用 `--identity copy` 为副本分配独立身份。
 
 操作示例与边界见 [知识治理使用指南](docs/architecture/KNOWLEDGE_FRESHNESS.md)。功能范围和验收见 [文档索引](docs/README.md) 与 [变更记录](CHANGELOG.md)。项目采用 [Apache-2.0](LICENSE) 许可。

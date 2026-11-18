@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -30,6 +31,43 @@ def run(
     if result.returncode:
         raise ValueError(f"{arguments[0]} exited {result.returncode}: {(result.stderr or result.stdout).strip()}")
     return result
+
+
+def verify_offline_wheel(root: Path, clone: Path, python: str, env: dict[str, str]) -> None:
+    wheels = root / "wheels"
+    run(root, [python, "-m", "pip", "wheel", "--no-deps", "--wheel-dir", str(wheels), str(clone)], env)
+    (wheel,) = wheels.glob("kbkit-*.whl")
+    home = root / "offline-env"
+    run(root, [sys.executable, "-m", "venv", str(home)], env)
+    offline_python = str(home / ("Scripts/python.exe" if os.name == "nt" else "bin/python"))
+    guard = """
+import sys
+def reject_network(event, args):
+    if event in {'socket.connect', 'socket.sendto', 'socket.getaddrinfo', 'socket.gethostbyname'}:
+        raise RuntimeError('network is disabled for the release probe')
+sys.addaudithook(reject_network)
+"""
+    install = guard + """
+import runpy
+sys.argv[0] = 'pip'
+runpy.run_module('pip', run_name='__main__')
+"""
+    run(root, [offline_python, "-c", install, "--isolated", "install", "--no-index", "--no-deps",
+               "--disable-pip-version-check", str(wheel)], env)
+    exercise = guard + """
+from pathlib import Path
+from kbkit.application import ApplicationService
+app = ApplicationService(Path(sys.argv[1]))
+app.initialize()
+result = app.apply_operations([
+    {'operation': 'create', 'path': 'offline.md', 'content': '# Offline proof\\n\\nlocaltoken'}
+])
+if not result['consistency']['ok'] or not app.search('localtoken')['hits']:
+    raise RuntimeError('offline write or search failed')
+if 'localtoken' not in app.read('offline.md')['content'] or 'findings' not in app.lint():
+    raise RuntimeError('offline read or lint failed')
+"""
+    run(root, [offline_python, "-c", exercise, str(root / "offline-vault")], env)
 
 
 def verify(url: str, branch: str | None, expected_sha: str | None, evidence: dict) -> None:
@@ -129,6 +167,24 @@ def verify(url: str, branch: str | None, expected_sha: str | None, evidence: dic
         require("newentry" in code and "oldentry" not in code and "sourcebody" not in code, "code map did not replace old symbols or leaked source body")
         require(not call("kb_search", query="oldmanual")["hits"], "manual was not invalidated by code update")
         checks["committed_code_refresh"] = "passed"
+
+        note = vault / "portability.md"
+        note.write_text("# Portable\n\nseedalpha\n", encoding="utf-8")
+        cli("index", str(vault))
+        copied = root / "copy"
+        shutil.copytree(vault, copied)
+        target = copied / note.name
+        original_stat = target.stat()
+        target.write_text("# Portable\n\nseedbravo\n", encoding="utf-8")
+        os.utime(target, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+        require("seedbravo" in cli("search", str(copied), "seedbravo"), "copied vault used the original index")
+        require(not cli("search", str(copied), "seedalpha"), "original content leaked into the copied index")
+        cli("add", str(copied), "--identity", "copy")
+        require("seedalpha" in cli("search", str(vault), "seedalpha"), "copy changed the original vault")
+        checks["vault_copy_isolation"] = "passed"
+
+        verify_offline_wheel(root, clone, python, env)
+        checks["offline_wheel_and_core"] = "passed"
 
         tests = run(root, [python, "-m", "unittest", "discover", "-s", str(clone / "tests"), "-q"], env)
         checks["tests"] = (tests.stderr or tests.stdout).strip()

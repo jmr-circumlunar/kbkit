@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+from contextlib import closing
 from pathlib import Path
 
 from . import __version__
@@ -20,6 +21,7 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_parser.add_argument("transport", choices=["stdio"])
     init_parser = subparsers.add_parser("init", help="Initialize a Markdown vault.")
     init_parser.add_argument("path", type=str)
+    init_parser.add_argument("--identity", choices=["moved", "copy"])
     index_parser = subparsers.add_parser("index", help="Build the vault index.")
     index_parser.add_argument("path", type=str)
     search_parser = subparsers.add_parser("search", help="Search indexed blocks.")
@@ -34,6 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     task_parser.add_argument("path", type=str)
     add_parser = subparsers.add_parser("add", help="Register a vault.")
     add_parser.add_argument("path", type=str)
+    add_parser.add_argument("--identity", choices=["moved", "copy"])
     use_parser = subparsers.add_parser("use", help="Select a registered vault.")
     use_parser.add_argument("vault_uuid", type=str)
     subparsers.add_parser("current", help="Show the active vault.")
@@ -138,17 +141,15 @@ def main() -> int:
             registry.close()
             return 0
         root = Path(args.path).resolve()
-        if args.command == "init":
-            profile = init_vault(root)
-            registry = VaultRegistry()
-            vault_uuid = registry.add(root)
-            registry.close()
-            print(f"profile: {profile}\nvault_uuid: {vault_uuid}")
-            return 0
-        if args.command == "add":
-            registry = VaultRegistry()
-            print(registry.add(root))
-            registry.close()
+        if args.command in {"init", "add"}:
+            try:
+                profile = init_vault(root) if args.command == "init" else None
+                with closing(VaultRegistry()) as registry:
+                    vault_uuid = registry.add(root, identity=args.identity)
+            except (ValueError, OSError) as exc:
+                print(str(exc), file=sys.stderr)
+                return 1
+            print(f"profile: {profile}\nvault_uuid: {vault_uuid}" if profile else vault_uuid)
             return 0
         if args.command == "maintain":
             report = maintain(root)

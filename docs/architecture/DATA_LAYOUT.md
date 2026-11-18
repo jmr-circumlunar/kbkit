@@ -30,7 +30,7 @@
 
 候选 Windows 路径：
 
-    %LOCALAPPDATA%\\kbkit\\indexes\\<vault_uuid>\\index.sqlite
+    %LOCALAPPDATA%\\kbkit\\indexes\\<vault_uuid>\\<location_key>.sqlite
     %LOCALAPPDATA%\\kbkit\\registry.sqlite
 
 原始方案提出 %APPDATA%。建议比较 %APPDATA% 与 %LOCALAPPDATA%，因为索引属于可重建的本机缓存，通常不应随漫游配置同步；最终位置由 ADR 冻结，并允许用户配置。
@@ -40,6 +40,7 @@
 - profile 中保存 vault_uuid，不用绝对路径作为唯一身份。
 - vault 移动后应能重新发现同一 UUID 并重建外置索引关联。
 - 复制 vault 会产生 UUID 冲突；检测到相同 UUID 位于不同根路径时，必须询问用户是“移动后的原库”还是“复制出的新库”，不得自动合并索引。
+- 索引位置键由规范化后的本机库路径生成，复制库即使尚未注册也使用独立索引。库 UUID 仍用于逻辑身份，迁移后可按新路径重建索引。
 - 路径、大小写和 Unicode 规范化需按平台策略处理。
 
 ## 3. 索引数据原则

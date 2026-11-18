@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from pathlib import Path
 
 from .core import build_index, init_vault, maintain, read, search_details
@@ -21,9 +22,8 @@ class ApplicationService:
 
     def initialize(self) -> dict:
         profile = init_vault(self.vault)
-        registry = VaultRegistry()
-        vault_uuid = registry.add(self.vault)
-        registry.close()
+        with closing(VaultRegistry()) as registry:
+            vault_uuid = registry.add(self.vault)
         return {"vault_uuid": vault_uuid, "profile": str(profile)}
 
     def index(self) -> dict:

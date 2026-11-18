@@ -47,6 +47,12 @@ SQLite：3.51.0
 
 公开地址验收仍未通过。候选保存在本地 `feat/knowledge-governance`。GitHub 仍返回 `6997e5b`，当前没有该候选分支或正式 `v0.1.0`。
 
+## 洁净 Git 验收与可复现构建
+
+`scripts/verify_release.py` 对公开地址复现了初始化失败。早期候选 `db17e7a2a87f794a64fefadf042e1d1ee3f7fc0c` 可安装并通过功能测试，但同一提交的独立检出会把不同文件时间戳写进 zipapp。上文记录的哈希只证明同一检出中连续构建一致。
+
+打包修复候选 `d9a59961b95e9d6fa5a054b80b24e54b52639d36` 位于本地 `test/release-verification`。Windows 11 上，Python 3.12.14 和 3.13.9 分别通过干净安装、MCP 首篇写入与检索、设计历史、依赖失效、已提交代码刷新和 60 项测试。两套环境分别从独立检出构建 zipapp，产物统一为 SHA-256 `3a0a57bd397cd368cf7226ca9e3ba0d7a61a9f98d5ab5174feb59954194d26c3`。zipapp 内包含 LICENSE。公开分支仍待推送和复验。
+
 ## 发布阻塞项
 
 1. 真实 MCP 客户端互操作矩阵。

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import os
 import sqlite3
-import uuid
 from pathlib import Path
+
+from .vault_profile import assign_copy_id, vault_id
 
 
 class VaultRegistry:
@@ -18,21 +19,23 @@ class VaultRegistry:
         self.connection.execute("CREATE TABLE IF NOT EXISTS active_vault (slot INTEGER PRIMARY KEY CHECK(slot = 1), vault_uuid TEXT)")
         self.connection.commit()
 
-    def add(self, root: Path, name: str | None = None) -> str:
-        profile = root / ".kbkit" / "profile.toml"
-        if not profile.exists():
-            raise ValueError("vault is not initialized")
-        value = None
-        for line in profile.read_text(encoding="utf-8").splitlines():
-            if line.startswith("vault_uuid"):
-                value = line.split('"', 2)[1]
-                break
-        if value is None:
-            raise ValueError("vault profile has no vault_uuid")
-        self.connection.execute("INSERT OR REPLACE INTO vaults VALUES (?, ?, ?)", (value, str(root.resolve()), name or root.name))
-        self.connection.commit()
-        self.connection.execute("INSERT OR REPLACE INTO active_vault(slot, vault_uuid) VALUES (1, ?)", (value,))
-        self.connection.commit()
+    def add(self, root: Path, name: str | None = None, *, identity: str | None = None) -> str:
+        root = root.resolve()
+        value = vault_id(root)
+        previous = self.connection.execute("SELECT path FROM vaults WHERE vault_uuid = ?", (value,)).fetchone()
+        else_where = previous is not None and Path(previous[0]) != root
+        if else_where and identity is None:
+            raise ValueError("vault UUID already registered at a different path; choose --identity moved or --identity copy")
+        if identity == "moved" and else_where and (Path(previous[0]) / ".kbkit" / "profile.toml").is_file():
+            raise ValueError("the original vault still exists; register this as a copy")
+        if identity == "copy" and (else_where or previous is None):
+            value = assign_copy_id(root)
+        with self.connection:
+            self.connection.execute(
+                "INSERT INTO vaults VALUES (?, ?, ?) ON CONFLICT(vault_uuid) DO UPDATE SET path = excluded.path, name = excluded.name",
+                (value, str(root), name or root.name),
+            )
+            self.connection.execute("INSERT OR REPLACE INTO active_vault(slot, vault_uuid) VALUES (1, ?)", (value,))
         return value
 
     def current(self) -> Path | None:

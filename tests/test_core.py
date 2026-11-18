@@ -1,6 +1,8 @@
 import tempfile
 import unittest
 import os
+import shutil
+from unittest.mock import patch
 from pathlib import Path
 
 from kbkit.core import build_index, init_vault, maintain, read, search
@@ -14,6 +16,58 @@ from kbkit.git_adapter import commit, status
 
 
 class CoreTests(unittest.TestCase):
+    def test_copied_vaults_never_share_index_and_explicit_copy_gets_own_id(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            with patch.dict(os.environ, {"KBKIT_INDEX_DIR": str(base / "index"), "KBKIT_REGISTRY_DIR": str(base / "registry")}):
+                original, duplicate = base / "original", base / "duplicate"
+                app = ApplicationService(original)
+                original_id = app.initialize()["vault_uuid"]
+                (original / "note.md").write_text("# Note\nseedalpha", encoding="utf-8")
+                app.index()
+                shutil.copytree(original, duplicate)
+                moved_note = duplicate / "note.md"
+                timestamp = moved_note.stat()
+                moved_note.write_text("# Note\nseedbravo", encoding="utf-8")
+                os.utime(moved_note, ns=(timestamp.st_atime_ns, timestamp.st_mtime_ns))
+                duplicate_app = ApplicationService(duplicate)
+                self.assertEqual(duplicate_app.search("seedalpha")["hits"], [])
+                self.assertEqual(len(duplicate_app.search("seedbravo")["hits"]), 1)
+                self.assertEqual(len(app.search("seedalpha")["hits"]), 1)
+                registry = VaultRegistry()
+                try:
+                    with self.assertRaisesRegex(ValueError, "choose --identity"):
+                        registry.add(duplicate)
+                    with self.assertRaisesRegex(ValueError, "original vault still exists"):
+                        registry.add(duplicate, identity="moved")
+                    copied_id = registry.add(duplicate, identity="copy")
+                    self.assertNotEqual(copied_id, original_id)
+                    self.assertEqual(registry.use(original_id), original)
+                    self.assertEqual(registry.use(copied_id), duplicate)
+                finally:
+                    registry.close()
+
+    def test_moved_vault_rebuilds_index_and_retains_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            with patch.dict(os.environ, {"KBKIT_INDEX_DIR": str(base / "index"), "KBKIT_REGISTRY_DIR": str(base / "registry")}):
+                original, destination = base / "original", base / "destination"
+                app = ApplicationService(original)
+                original_id = app.initialize()["vault_uuid"]
+                note = original / "note.md"
+                note.write_text("# Note\nportabilitytoken", encoding="utf-8")
+                original_hits = app.search("portabilitytoken")["hits"]
+                original.rename(destination)
+                registry = VaultRegistry()
+                try:
+                    with self.assertRaisesRegex(ValueError, "choose --identity"):
+                        registry.add(destination)
+                    self.assertEqual(registry.add(destination, identity="moved"), original_id)
+                    self.assertEqual(registry.current(), destination)
+                finally:
+                    registry.close()
+                self.assertEqual(ApplicationService(destination).search("portabilitytoken")["hits"], original_hits)
+
     def test_init_index_search_read(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

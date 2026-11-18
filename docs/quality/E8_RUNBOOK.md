@@ -21,7 +21,7 @@ py -3.13 -m venv .venv
 python scripts/verify_release.py https://github.com/jmr-circumlunar/kbkit.git --branch <branch-or-tag> --expect-sha <full-sha>
 ```
 
-脚本覆盖实际 stdio 调用和 Skill 文件发现。空白 Agent 自主安装、宿主原生 Skill 加载、持久计划和第三方编辑器仍按各自的验收项记录。
+脚本覆盖实际 stdio 调用、Skill 文件发现、库副本隔离，并在 wheel 构建后使用禁用包索引及 Python 网络调用的干净环境验证本地安装和核心操作。空白 Agent 自主安装、宿主原生 Skill 加载、持久计划和第三方编辑器仍按各自的验收项记录。
 
 ## Skill 加载
 

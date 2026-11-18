@@ -22,3 +22,5 @@
 移动 vault、复制 vault、UUID 冲突、删除索引重建、用户 Git 状态、同卷 staging 和目录清理策略。
 
 E1 决定：可重建 SQLite 索引默认位于 `%LOCALAPPDATA%\\kbkit\\indexes\\<vault_uuid>`。profile 和事务数据仍留在 vault 的 `.kbkit` 内，最终清理规则由 E2 原型验证。
+
+E8 补充：同一 UUID 的不同本机路径使用不同索引文件。旧索引可保留，运行时从 Markdown 重建当前路径的索引。重复注册需显式选择迁移或副本。迁移保留原 UUID，副本得到独立 UUID。

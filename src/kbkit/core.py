@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import sqlite3
 import uuid
 import json
@@ -20,6 +19,7 @@ from .prototype_lock import file_lock
 from .prototype_markdown import parse_document
 from .knowledge import INACTIVE_STATES, KnowledgeVault
 from .code_sync import refresh_code
+from .vault_profile import index_path
 
 
 @dataclass(frozen=True)
@@ -63,21 +63,6 @@ def _blocks(relative: str, data: bytes) -> list[Block]:
     if current:
         blocks.append(Block(relative, f"{relative}:{ordinal}", heading, "\n".join(current)))
     return blocks
-
-
-def _index_path(root: Path) -> Path:
-    configured = os.environ.get("KBKIT_INDEX_DIR")
-    base = Path(configured) if configured else Path(os.environ.get("LOCALAPPDATA", root / ".kbkit")) / "kbkit" / "indexes"
-    base.mkdir(parents=True, exist_ok=True)
-    return base / f"{_vault_id(root)}.sqlite"
-
-
-def _vault_id(root: Path) -> str:
-    profile = root / ".kbkit" / "profile.toml"
-    for line in profile.read_text(encoding="utf-8").splitlines():
-        if line.startswith("vault_uuid"):
-            return line.split('"', 2)[1]
-    raise ValueError("vault is not initialized")
 
 
 def _sync_index(root: Path, connection: sqlite3.Connection, state: StateStore, *, verify_hashes: bool) -> int:
@@ -148,7 +133,7 @@ def _sync_index(root: Path, connection: sqlite3.Connection, state: StateStore, *
 
 
 def _build_index(root: Path, *, verify_hashes: bool = True) -> int:
-    with closing(sqlite3.connect(_index_path(root))) as connection, closing(StateStore(root)) as state:
+    with closing(sqlite3.connect(index_path(root, create=True))) as connection, closing(StateStore(root)) as state:
         with state.connection, connection:
             return _sync_index(root, connection, state, verify_hashes=verify_hashes)
 
@@ -164,7 +149,7 @@ def search_details(root: Path, query: str, include_inactive: bool = False) -> li
         raise ValueError("vault is not initialized")
     with file_lock(root / ".kbkit" / "maintenance.lock"):
         _build_index(root, verify_hashes=False)
-        with closing(sqlite3.connect(_index_path(root))) as connection:
+        with closing(sqlite3.connect(index_path(root))) as connection:
             statuses = KnowledgeVault(root).statuses()
             placeholders = ", ".join("?" for _ in INACTIVE_STATES)
             for path, lifecycle in connection.execute(
@@ -206,7 +191,7 @@ def maintain(root: Path) -> dict:
                 if not state.has_open_proposal(finding["message"], finding):
                     state.create_proposal(risk, finding["message"], finding)
             expired = state.expire_missing_findings(findings)
-            with closing(sqlite3.connect(_index_path(root))) as connection:
+            with closing(sqlite3.connect(index_path(root))) as connection:
                 indexed_blocks = connection.execute("SELECT count(*) FROM blocks").fetchone()[0]
             status = "partial" if any(row["status"] in {"conflicted", "unverified"} for row in code_sync) else "succeeded"
             report = {"run_id": run_id, "status": status, "blocks": indexed_blocks, "changed_blocks": blocks, "graph": graph, "findings": findings, "expired_proposals": expired, "proposals": len(state.list_proposals("pending")),

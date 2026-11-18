@@ -6,16 +6,14 @@ import hashlib
 import sqlite3
 from pathlib import Path
 
+from .vault_profile import index_path
+
 
 def check_consistency(root: Path) -> dict:
     profile = root / ".kbkit" / "profile.toml"
     if not profile.exists():
         return {"ok": False, "errors": ["vault is not initialized"]}
-    uuid_value = next(line.split('"', 2)[1] for line in profile.read_text(encoding="utf-8").splitlines() if line.startswith("vault_uuid"))
-    import os
-
-    base = Path(os.environ.get("KBKIT_INDEX_DIR", Path(os.environ.get("LOCALAPPDATA", root / ".kbkit")) / "kbkit" / "indexes"))
-    database = base / f"{uuid_value}.sqlite"
+    database = index_path(root)
     if not database.exists():
         return {"ok": False, "errors": ["index is missing"]}
     connection = sqlite3.connect(database)
