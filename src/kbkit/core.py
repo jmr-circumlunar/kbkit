@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import sqlite3
+import stat
 import uuid
 import json
 from collections import defaultdict
@@ -65,6 +67,28 @@ def _blocks(relative: str, data: bytes) -> list[Block]:
     return blocks
 
 
+def _markdown_files(root: Path) -> dict[str, tuple[Path, os.stat_result]]:
+    paths = {}
+    folders = [root]
+    while folders:
+        with os.scandir(folders.pop()) as entries:
+            for entry in entries:
+                if entry.name.lower() in {".kbkit", ".git"} or entry.is_symlink():
+                    continue
+                is_directory = entry.is_dir(follow_symlinks=False)
+                if not is_directory and not entry.name.lower().endswith(".md"):
+                    continue
+                info = entry.stat(follow_symlinks=False)
+                if getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+                    continue
+                path = Path(entry.path)
+                if is_directory:
+                    folders.append(path)
+                elif stat.S_ISREG(info.st_mode):
+                    paths[path.relative_to(root).as_posix()] = (path, info)
+    return paths
+
+
 def _sync_index(root: Path, connection: sqlite3.Connection, state: StateStore, *, verify_hashes: bool) -> int:
     connection.execute("CREATE TABLE IF NOT EXISTS documents(path TEXT PRIMARY KEY, content_hash TEXT NOT NULL, document_id TEXT, mtime_ns INTEGER, size INTEGER, lifecycle TEXT)")
     columns = {row[1] for row in connection.execute("PRAGMA table_info(documents)")}
@@ -84,21 +108,15 @@ def _sync_index(root: Path, connection: sqlite3.Connection, state: StateStore, *
             "SELECT path, content_hash, document_id, mtime_ns, size, lifecycle FROM documents"
         )
     }
-    paths = {
-        relative.as_posix(): path
-        for path in sorted(root.rglob("*.md"))
-        if not {".kbkit", ".git"}.intersection((relative := path.relative_to(root)).parts)
-        and not path.is_symlink() and path.is_file()
-    }
+    paths = _markdown_files(root)
     missing = documents.keys() - paths.keys()
     missing_by_hash: dict[str, list[str]] = defaultdict(list)
     for relative in sorted(missing):
         missing_by_hash[documents[relative][0]].append(relative)
     moved_from: set[str] = set()
-    for relative, path in paths.items():
-        stat = path.stat()
+    for relative, (path, info) in sorted(paths.items()):
         previous = documents.get(relative)
-        metadata = (stat.st_mtime_ns, stat.st_size)
+        metadata = (info.st_mtime_ns, info.st_size)
         if not index.rebuild_required and not verify_hashes and previous and previous[4] is not None and previous[2:4] == metadata:
             continue
         data = path.read_bytes()
