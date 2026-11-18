@@ -99,7 +99,7 @@ def _sync_index(root: Path, connection: sqlite3.Connection, state: StateStore, *
         stat = path.stat()
         previous = documents.get(relative)
         metadata = (stat.st_mtime_ns, stat.st_size)
-        if not verify_hashes and previous and previous[4] is not None and previous[2:4] == metadata:
+        if not index.rebuild_required and not verify_hashes and previous and previous[4] is not None and previous[2:4] == metadata:
             continue
         data = path.read_bytes()
         content_hash = _hash(data)
@@ -107,6 +107,10 @@ def _sync_index(root: Path, connection: sqlite3.Connection, state: StateStore, *
             if previous[2:4] != metadata or previous[4] is None:
                 lifecycle = previous[4] or parse_document(data).fields.get("state", "active")
                 connection.execute("UPDATE documents SET mtime_ns = ?, size = ?, lifecycle = ? WHERE path = ?", (*metadata, lifecycle, relative))
+            if index.rebuild_required:
+                for block in _blocks(relative, data):
+                    index.insert_block(block.path, block.block_id, f"{block.heading}\n{block.content}", commit=False)
+                    count += 1
             continue
         document_id = previous[1] if previous else None
         if previous is None:
@@ -135,6 +139,7 @@ def _sync_index(root: Path, connection: sqlite3.Connection, state: StateStore, *
 def _build_index(root: Path, *, verify_hashes: bool = True) -> int:
     with closing(sqlite3.connect(index_path(root, create=True))) as connection, closing(StateStore(root)) as state:
         with state.connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
             return _sync_index(root, connection, state, verify_hashes=verify_hashes)
 
 

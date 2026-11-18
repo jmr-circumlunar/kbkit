@@ -141,6 +141,13 @@ def verify(url: str, branch: str | None, expected_sha: str | None, evidence: dic
         require(call("kb_write_apply", operations=request)["consistency"]["ok"] and design.is_file(), "first note write failed")
         require(bool(call("kb_search", query="bluefinch")["hits"]), "new note was not searchable")
         checks["stdio_first_note"] = "passed"
+        (vault / "中文.md").write_text("# 数据库连接池设计\n\nERR_TIMEOUT", encoding="utf-8")
+        (vault / "旧版.md").write_text("---\nstate: archived\n---\n# 数据库连接池旧版", encoding="utf-8")
+        (vault / "标识符.md").write_text("# ERR TIMEOUT", encoding="utf-8")
+        for query in ("连接", "连接池", "ERR_TIMEOUT"):
+            require({hit["path"] for hit in call("kb_search", query=query)["hits"]} == {"中文.md"},
+                    f"unexpected retrieval results for {query}")
+        checks["retrieval_golden"] = "passed"
         skills = {item.parent.name for item in (clone / "skills").glob("*/SKILL.md")}
         require({"kb-onboard", "kb-query", "kb-author", "kb-maintain", "kb-ingest"} <= skills, "missing Skill files")
         evidence["skill_files"] = sorted(skills)

@@ -1,0 +1,55 @@
+import sqlite3
+import tempfile
+import unittest
+from contextlib import closing
+from pathlib import Path
+
+from kbkit.application import ApplicationService
+from kbkit.core import init_vault
+from kbkit.vault_profile import index_path
+
+
+class SearchQualityTests(unittest.TestCase):
+    def test_chinese_and_identifier_golden_cases(self):
+        documents = {
+            "design.md": "# 数据库连接池设计",
+            "ops.md": "# 生产部署回滚步骤\n\nAPI接入指南",
+            "archived.md": "---\nstate: archived\n---\n# 生产部署回滚旧说明",
+            "punctuation.md": "# 部署。回滚",
+            "identifier.md": "# ERR_TIMEOUT field",
+            "decoy.md": "# ERR TIMEOUT fields",
+        }
+        cases = {
+            "连接": {"design.md"},
+            "连接池": {"design.md"},
+            "部署回滚": {"ops.md"},
+            "API接入": {"ops.md"},
+            "API": {"ops.md"},
+            "ERR_TIMEOUT": {"identifier.md"},
+            "回。": {"ops.md", "punctuation.md"},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_vault(root)
+            for name, text in documents.items():
+                (root / name).write_text(text, encoding="utf-8")
+            app = ApplicationService(root)
+            for query, expected in cases.items():
+                with self.subTest(query=query):
+                    self.assertEqual({item["path"] for item in app.search(query)["hits"]}, expected)
+            results = {item["path"]: item["state"] for item in app.search("部署回滚", include_inactive=True)["hits"]}
+            self.assertEqual(results, {"ops.md": "active", "archived.md": "archived"})
+
+    def test_old_fts_index_upgrades_even_when_markdown_unchanged(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_vault(root)
+            (root / "note.md").write_text("# 设计复核规则", encoding="utf-8")
+            app = ApplicationService(root)
+            app.index()
+            with closing(sqlite3.connect(index_path(root))) as connection, connection:
+                connection.execute("DROP TABLE blocks")
+                connection.execute("CREATE VIRTUAL TABLE blocks USING fts5(path, block_id, content)")
+                connection.execute("INSERT INTO blocks VALUES (?, ?, ?)", ("note.md", "note.md:0", "设计复核规则"))
+            self.assertEqual(app.search("复核")["hits"][0]["path"], "note.md")
+            self.assertEqual(app.index()["blocks"], 0)

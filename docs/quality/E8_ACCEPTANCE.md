@@ -21,7 +21,7 @@ SQLite：3.51.0
 | I4 数据可搬运 | Windows 跨路径通过 | 移动保留 UUID，副本获得独立 UUID。同 UUID 并存时索引也按位置隔离。跨系统报告待补 |
 | I5 格式通用 | 部分通过 | BOM、CRLF、Frontmatter round-trip 测试通过，第三方编辑器矩阵待补 |
 | I6 分发即用 | 公开分发未通过 | 本地 clean venv 和临时 zipapp 通过，GitHub 新克隆无法初始化知识库 |
-| I7 Agent 能力完整 | 未通过 | MCP schema 和本地 tools/call 已通过，真实第三方客户端互操作待验证 |
+| I7 Agent 能力完整 | 部分通过 | Codex 原生接入和官方 Python SDK 核心交互已验证，完整宿主矩阵和持久调度待验证 |
 
 ## 当前自动化证据
 
@@ -58,6 +58,8 @@ SQLite：3.51.0
 已在本地 `test/release-portability` 的 `530b31914afa4123737899459b8611ff33481522` 复验。Windows build 26200 上，Python 3.11.18、3.12.14、3.13.9 各自通过干净克隆安装、62 项测试、MCP、库内治理、代码提交同步和副本隔离。wheel 在构建完成后离线安装。运行探针拒绝 Python 的网络解析、连接和发送操作，仍成功初始化、写入、检索、读取和 lint。三套环境的独立构建得到相同 zipapp SHA-256 `443795be7480ddec043ea550ced2a7c073a77c8f6e9aca8164f468030fba83e5`。Linux、公开 Git 克隆和完整宿主矩阵仍待验证。
 
 ## 发布阻塞项
+
+MCP 补测候选 `c6e71440264ca1491699f2208e86a0a8c6a52a9a` 位于本地 `test/release-mcp`。官方 Python SDK 1.30.0 在隔离客户端环境通过 `2025-11-25` 握手、ping、八个工具发现、中文路径写入和读取、搜索及维护报告。结构化工具响应通过客户端解析。旧版本的 initialized 错误回包及 ping 失败已复现。Windows Python 3.11.18、3.12.14、3.13.9 对新候选各通过 63 项测试，独立 zipapp 构建 SHA-256 均为 `9869e95041a4026cdc2406f36f4fe94d284173808d5233ba5498955bd7f6d1df`。协议参考 [生命周期](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle) 和 [Ping](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/ping)。
 
 1. 真实 MCP 客户端互操作矩阵。
 2. Codex、Claude Code、Workbuddy 等 Agent 宿主中的 Skill 加载记录。
