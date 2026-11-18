@@ -38,6 +38,8 @@ CLI、Python API、MCP 必须调用相同的应用服务。应用服务接收领
 
 这 8 个名称是提案，不是冻结的协议。需要确认 MCP 协议版本、首发 stdio 或 HTTP transport、通知/取消/超时和客户端兼容矩阵。
 
+0.1.0 候选提供 stdio 和 `2025-11-25` 协议版本。传输固定使用 UTF-8，支持 `initialize`、`ping`、`tools/list` 和 `tools/call`，收到通知后不发送响应。工具结果同时提供文本和 `structuredContent`。实际工具以 `tools/list` 为准。当前执行模型不支持中途取消任务。客户端证据记录在 [E8 验收记录](../quality/E8_ACCEPTANCE.md)。
+
 ## 5. 统一结果结构
 
 搜索命中至少包含：

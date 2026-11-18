@@ -107,9 +107,23 @@ def verify(url: str, branch: str | None, expected_sha: str | None, evidence: dic
 
         def mcp(method: str, **params) -> dict:
             request = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
-            result = run(root, [python, "-m", "kbkit", "mcp", "stdio"], env, payload=json.dumps(request) + "\n")
+            messages = [request]
+            if method != "initialize":
+                messages = [
+                    {"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
+                        "protocolVersion": "2025-11-25", "capabilities": {},
+                        "clientInfo": {"name": "kbkit-release-check", "version": "1"},
+                    }},
+                    {"jsonrpc": "2.0", "method": "notifications/initialized"},
+                    request,
+                ]
+            payload = "\n".join(json.dumps(message, ensure_ascii=False) for message in messages) + "\n"
+            result = run(root, [python, "-m", "kbkit", "mcp", "stdio"], env, payload=payload)
             require(not result.stderr, "MCP emitted stderr during a successful probe")
-            return json.loads(result.stdout)["result"]
+            responses = [json.loads(line) for line in result.stdout.splitlines()]
+            require([response["id"] for response in responses] == ([1] if method == "initialize" else [0, 1]),
+                    "MCP returned unsolicited responses or omitted a response")
+            return responses[-1]["result"]
 
         def call(name: str, **arguments) -> dict:
             result = mcp("tools/call", name=name, arguments=arguments)
@@ -118,6 +132,7 @@ def verify(url: str, branch: str | None, expected_sha: str | None, evidence: dic
             return ast.literal_eval(result["content"][0]["text"])
 
         evidence["mcp_protocol"] = mcp("initialize")["protocolVersion"]
+        require(mcp("ping") == {}, "MCP ping is not available")
         names = {tool["name"] for tool in mcp("tools/list")["tools"]}
         require({"kb_search", "kb_read", "kb_write_plan", "kb_write_apply", "kb_maintain"} <= names, "missing advertised tools")
         design = vault / "design.md"

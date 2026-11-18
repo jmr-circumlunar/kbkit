@@ -16,9 +16,9 @@ SQLite：3.51.0
 | 判据 | 当前状态 | 证据 |
 |---|---|---|
 | I1 不依赖宿主软件 | 通过本地范围 | 核心 CLI/Python 测试不依赖 Obsidian 或特定宿主 |
-| I2 不依赖网络 | 通过本地范围 | 核心实现使用标准库，模型和 Git 可选 |
+| I2 不依赖网络 | 通过本地范围 | 已构建 wheel 在禁用包索引及 Python 网络调用时安装并完成核心操作 |
 | I3 零第三方运行时依赖 | 通过 | `pyproject.toml` dependencies 为空，干净 venv 安装通过 |
-| I4 数据可搬运 | 部分通过 | vault 重建索引和路径安全测试通过，跨环境报告待补 |
+| I4 数据可搬运 | Windows 跨路径通过 | 移动保留 UUID，副本获得独立 UUID。同 UUID 并存时索引也按位置隔离。跨系统报告待补 |
 | I5 格式通用 | 部分通过 | BOM、CRLF、Frontmatter round-trip 测试通过，第三方编辑器矩阵待补 |
 | I6 分发即用 | 公开分发未通过 | 本地 clean venv 和临时 zipapp 通过，GitHub 新克隆无法初始化知识库 |
 | I7 Agent 能力完整 | 未通过 | MCP schema 和本地 tools/call 已通过，真实第三方客户端互操作待验证 |
@@ -52,6 +52,10 @@ SQLite：3.51.0
 `scripts/verify_release.py` 对公开地址复现了初始化失败。早期候选 `db17e7a2a87f794a64fefadf042e1d1ee3f7fc0c` 可安装并通过功能测试，但同一提交的独立检出会把不同文件时间戳写进 zipapp。上文记录的哈希只证明同一检出中连续构建一致。
 
 打包修复候选 `d9a59961b95e9d6fa5a054b80b24e54b52639d36` 位于本地 `test/release-verification`。Windows 11 上，Python 3.12.14 和 3.13.9 分别通过干净安装、MCP 首篇写入与检索、设计历史、依赖失效、已提交代码刷新和 60 项测试。两套环境分别从独立检出构建 zipapp，产物统一为 SHA-256 `3a0a57bd397cd368cf7226ca9e3ba0d7a61a9f98d5ab5174feb59954194d26c3`。zipapp 内包含 LICENSE。公开分支仍待推送和复验。
+
+搬运探针在 `d9a5996` 复现了索引串库。两个库保留相同 UUID，文件大小及时间戳一致时，副本返回了原库的旧词，遗漏副本新词。修复后缓存键包含规范化库路径，注册重复 UUID 时显式选择迁移或副本。
+
+已在本地 `test/release-portability` 的 `530b31914afa4123737899459b8611ff33481522` 复验。Windows build 26200 上，Python 3.11.18、3.12.14、3.13.9 各自通过干净克隆安装、62 项测试、MCP、库内治理、代码提交同步和副本隔离。wheel 在构建完成后离线安装。运行探针拒绝 Python 的网络解析、连接和发送操作，仍成功初始化、写入、检索、读取和 lint。三套环境的独立构建得到相同 zipapp SHA-256 `443795be7480ddec043ea550ced2a7c073a77c8f6e9aca8164f468030fba83e5`。Linux、公开 Git 克隆和完整宿主矩阵仍待验证。
 
 ## 发布阻塞项
 

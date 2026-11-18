@@ -34,3 +34,27 @@ class McpProcessTests(unittest.TestCase):
             self.assertEqual(responses[0]["result"]["serverInfo"]["name"], "kbkit")
             self.assertEqual(len(responses[1]["result"]["tools"]), 8)
             self.assertIn("initialized", responses[2]["result"]["content"][0]["text"])
+
+    def test_stdio_handles_notifications_ping_and_utf8_in_one_session(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "设计.md").write_text("# 设计\n\n测试内容", encoding="utf-8")
+            env = dict(os.environ, KBKIT_VAULT=str(root), PYTHONIOENCODING="ascii")
+            requests = [
+                json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize"}),
+                json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+                "{malformed",
+                json.dumps({"jsonrpc": "2.0", "id": "ping", "method": "ping"}),
+                json.dumps({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                            "params": {"name": "kb_read", "arguments": {"path": "设计.md"}}}, ensure_ascii=False),
+            ]
+            result = subprocess.run(
+                [sys.executable, "-m", "kbkit", "mcp", "stdio"], input=("\n".join(requests) + "\n").encode("utf-8"),
+                capture_output=True, check=True, env=env, timeout=10,
+            )
+            responses = [json.loads(line) for line in result.stdout.splitlines()]
+            self.assertEqual(len(responses), 4)
+            self.assertEqual(responses[1]["error"]["code"], -32700)
+            self.assertEqual(responses[2], {"jsonrpc": "2.0", "id": "ping", "result": {}})
+            self.assertIn("测试内容", responses[3]["result"]["structuredContent"]["content"])
+            self.assertEqual(result.stderr, b"")

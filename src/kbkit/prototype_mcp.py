@@ -33,10 +33,18 @@ WRITE_SCHEMA = {
 }
 
 
-def handle(message: dict, service: ApplicationService | None = None) -> dict:
+def handle(message: object, service: ApplicationService | None = None) -> dict | None:
+    if not isinstance(message, dict) or message.get("jsonrpc") != "2.0" or not isinstance(message.get("method"), str):
+        return {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "invalid request"}}
+    if "id" not in message:
+        return None
     method = message.get("method")
-    request_id = message.get("id")
-    if method == "initialize":
+    request_id = message["id"]
+    if type(request_id) not in {int, str}:
+        return {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "invalid request ID"}}
+    if method == "ping":
+        result = {}
+    elif method == "initialize":
         result = {"protocolVersion": "2025-11-25", "capabilities": {"tools": {}}, "serverInfo": {"name": "kbkit", "version": "0.1.0"}}
     elif method == "tools/list":
         result = {"tools": [
@@ -53,8 +61,12 @@ def handle(message: dict, service: ApplicationService | None = None) -> dict:
         if service is None:
             return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32000, "message": "vault service is not configured"}}
         params = message.get("params", {})
+        if not isinstance(params, dict):
+            return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32602, "message": "params must be an object"}}
         name = params.get("name")
         arguments = params.get("arguments", {})
+        if not isinstance(arguments, dict):
+            return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32602, "message": "arguments must be an object"}}
         try:
             if name == "kb_status":
                 payload = service.status()
@@ -93,7 +105,7 @@ def handle(message: dict, service: ApplicationService | None = None) -> dict:
             return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32602, "message": str(exc)}}
         except (OSError, sqlite3.Error) as exc:
             return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32000, "message": str(exc)}}
-        result = {"content": [{"type": "text", "text": str(payload)}]}
+        result = {"content": [{"type": "text", "text": str(payload)}], "structuredContent": payload}
     else:
         return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32601, "message": "method not found"}}
     return {"jsonrpc": "2.0", "id": request_id, "result": result}

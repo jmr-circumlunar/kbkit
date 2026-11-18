@@ -92,12 +92,18 @@ def main() -> int:
         vault = Path(os.environ["KBKIT_VAULT"]).resolve() if "KBKIT_VAULT" in os.environ else None
         service = ApplicationService(vault) if vault else None
 
-        for line in sys.stdin:
+        for line in sys.stdin.buffer:
             if not line.strip():
                 continue
-            response = handle(json.loads(line), service)
-            sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
-            sys.stdout.flush()
+            try:
+                message = json.loads(line.decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                response = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "invalid JSON"}}
+            else:
+                response = handle(message, service)
+            if response is not None:
+                sys.stdout.buffer.write((json.dumps(response, ensure_ascii=False) + "\n").encode("utf-8"))
+                sys.stdout.buffer.flush()
         return 0
     if args.command == "knowledge":
         from .code_sync import bind_code
