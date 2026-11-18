@@ -3,28 +3,15 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
 
 from .prototype_markdown import parse_document
-from .transaction import digest
+from .transaction import digest, write_atomic
 
 
 INACTIVE_STATES = {"draft", "archived", "deprecated", "stale", "unverified", "conflicted", "unreviewed", "missing"}
-
-
-def write_atomic(path: Path, data: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, name = tempfile.mkstemp(prefix=".kbkit-", dir=path.parent)
-    try:
-        with os.fdopen(descriptor, "wb") as output:
-            output.write(data)
-        Path(name).replace(path)
-    finally:
-        Path(name).unlink(missing_ok=True)
 
 
 class KnowledgeVault:

@@ -23,7 +23,7 @@ def bind_code(vault: KnowledgeVault, source: str, repo: Path, ref: str, scopes: 
     if Path(git_root).resolve() != repo:
         raise ValueError("bind the repository root")
     read_objects(repo, ["show-ref", "--verify", "--", ref])
-    if not scopes or any(not scope or scope == "." or Path(scope).anchor or
+    if not scopes or any(not Path(scope).parts or Path(scope).anchor or
                          ".." in Path(scope).parts or "\\" in scope for scope in scopes):
         raise ValueError("choose explicit repo-relative source paths using forward slashes")
     page = vault.markdown_path(f"_generated/code/{source}.md")
@@ -82,6 +82,9 @@ def _refresh(vault: KnowledgeVault, source: str, entry: dict) -> dict:
     target = vault.root / vault.markdown_path(page)
     before = target.read_bytes() if target.exists() else None
     before_hash = digest(before) if before is not None else None
+    git_root = read_objects(repo, ["rev-parse", "--show-toplevel"]).decode("utf-8").strip()
+    if Path(git_root).resolve() != repo:
+        raise GitUnavailable("bound repository root changed")
     commit = read_objects(repo, ["rev-parse", "--verify", "--end-of-options", f"{ref}^{{commit}}"]).decode("ascii").strip()
     if commit == entry.get("checked_commit") and before_hash == entry.get("page_hash") and before is not None and not entry.get("issue"):
         return {"source": source, "page": page, "status": "unchanged", "commit": commit}

@@ -1,7 +1,8 @@
 ---
 name: kb-ingest
 description: Turn authorized files into source-linked Markdown knowledge pages.
-kbkit-api-version: v1
+metadata:
+  kbkit-api-version: v1
 ---
 
 # kbkit file ingestion

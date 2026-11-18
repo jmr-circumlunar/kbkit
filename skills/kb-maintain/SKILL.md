@@ -1,7 +1,8 @@
 ---
 name: kb-maintain
 description: Run a self-growth maintenance cycle for a local kbkit knowledge base.
-kbkit-api-version: v1
+metadata:
+  kbkit-api-version: v1
 ---
 
 # kbkit maintenance

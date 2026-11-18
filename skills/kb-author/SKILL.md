@@ -1,7 +1,8 @@
 ---
 name: kb-author
 description: Write to a local kbkit knowledge base with preview, conflict checks and recovery semantics.
-kbkit-api-version: v1
+metadata:
+  kbkit-api-version: v1
 ---
 
 # kbkit authoring

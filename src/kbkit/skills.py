@@ -11,6 +11,7 @@ def list_skills(package_root: Path | None = None) -> list[dict]:
     for path in sorted(root.glob("*/SKILL.md")):
         text = path.read_text(encoding="utf-8")
         name = path.parent.name
-        api_version = next((line.split(":", 1)[1].strip() for line in text.splitlines() if line.startswith("kbkit-api-version:")), "unknown")
+        header = text.split("---", 2)[1] if text.startswith("---") and text.count("---") > 1 else ""
+        api_version = next((line.split(":", 1)[1].strip() for line in header.splitlines() if line.lstrip().startswith("kbkit-api-version:")), "unknown")
         result.append({"name": name, "path": str(path), "content": text, "api_version": api_version})
     return result

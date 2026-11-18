@@ -1,7 +1,8 @@
 ---
 name: kb-onboard
 description: Initialize and inspect a local kbkit Markdown knowledge base.
-kbkit-api-version: v1
+metadata:
+  kbkit-api-version: v1
 ---
 
 # kbkit onboarding

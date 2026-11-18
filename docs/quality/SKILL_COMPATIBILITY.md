@@ -1,6 +1,6 @@
 # Skill 兼容矩阵
 
-Skill 文件使用 `kbkit-api-version: v1` 标记接口版本。宿主加载 Skill 后应先读取该版本，再通过 MCP `initialize` 获取服务版本。
+Skill 在 `metadata` 中使用 `kbkit-api-version: v1` 标记接口版本。宿主加载 Skill 后可读取该版本，并通过 MCP `initialize` 获取服务版本。
 
 | Skill | API 版本 | 需要 MCP | 状态 |
 |---|---|---|---|

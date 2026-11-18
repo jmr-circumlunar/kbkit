@@ -1,7 +1,8 @@
 ---
 name: kb-query
 description: Search and read a local kbkit knowledge base with traceable citations.
-kbkit-api-version: v1
+metadata:
+  kbkit-api-version: v1
 ---
 
 # kbkit query

@@ -17,6 +17,20 @@ def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def write_atomic(path: Path, data: bytes) -> None:
+    """Publish a complete file on the target volume."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, name = tempfile.mkstemp(prefix=".kbkit-", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(data)
+            output.flush()
+            os.fsync(output.fileno())
+        Path(name).replace(path)
+    finally:
+        Path(name).unlink(missing_ok=True)
+
+
 @dataclass(frozen=True)
 class PlannedChange:
     relative_path: str
@@ -165,10 +179,14 @@ def recover_transaction(root: Path, journal: Path) -> str:
         target = (root / change["path"]).resolve()
         if change.get("create_only"):
             after = Path(change["staging"]).read_bytes()
+            if digest(after) != change["after_hash"]:
+                raise TransactionError("staged image hash mismatch")
             handle, temporary = tempfile.mkstemp(prefix=".kbkit-create-", dir=target.parent)
             try:
                 with os.fdopen(handle, "wb") as output:
                     output.write(after)
+                    output.flush()
+                    os.fsync(output.fileno())
                 os.link(temporary, target)
                 continue
             except FileExistsError:
@@ -187,7 +205,10 @@ def recover_transaction(root: Path, journal: Path) -> str:
             record["state"] = "divergent"
             journal.write_text(json.dumps(record), encoding="utf-8")
             return "divergent"
-        target.write_bytes(Path(change["staging"]).read_bytes())
+        after = Path(change["staging"]).read_bytes()
+        if digest(after) != change["after_hash"]:
+            raise TransactionError("staged image hash mismatch")
+        write_atomic(target, after)
     record["state"] = "applied"
     journal.write_text(json.dumps(record), encoding="utf-8")
     return "applied"
