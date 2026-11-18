@@ -20,6 +20,7 @@
 | FR-018 分发 | package/build config | PKG-001/002 |
 | FR-019/020 自成长与提案 | change_event、session_artifact、task_runner、proposal_engine | AUTO-001–010、PROP-001–006 |
 | FR-021 Agent 驱动运维 | skill_resources、mcp_adapter、application services | AGENT-001–006 |
+| FR-015/019/020 库内关联失效和绑定代码同步 | knowledge、code_sync、定时维护及检索 | `test_knowledge.py` 检查复核历史、备份恢复、间接依赖、已提交代码更新、默认检索和冲突保护 |
 
 ## 追踪规则
 

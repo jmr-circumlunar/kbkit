@@ -16,6 +16,18 @@ def create_backup(root: Path, destination: Path) -> dict:
             relative = path.relative_to(root).as_posix()
             archive.write(path, relative)
             files.append(relative)
+        metadata = root / ".kbkit"
+        manifest = metadata / "knowledge.json"
+        if manifest.is_file() and not manifest.is_symlink():
+            relative = manifest.relative_to(root).as_posix()
+            archive.writestr(relative, manifest.read_bytes())
+            files.append(relative)
+            snapshots = sorted((metadata / "history").glob("*.md"))
+            for path in snapshots:
+                if path.is_file() and not path.is_symlink():
+                    relative = path.relative_to(root).as_posix()
+                    archive.write(path, relative)
+                    files.append(relative)
     return {"path": str(destination), "files": files}
 
 

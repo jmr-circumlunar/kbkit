@@ -17,6 +17,9 @@ from .state import StateStore
 from .graph import build_graph
 from .lint import lint
 from .prototype_lock import file_lock
+from .prototype_markdown import parse_document
+from .knowledge import INACTIVE_STATES, KnowledgeVault
+from .code_sync import refresh_code
 
 
 @dataclass(frozen=True)
@@ -78,7 +81,7 @@ def _vault_id(root: Path) -> str:
 
 
 def _sync_index(root: Path, connection: sqlite3.Connection, state: StateStore, *, verify_hashes: bool) -> int:
-    connection.execute("CREATE TABLE IF NOT EXISTS documents(path TEXT PRIMARY KEY, content_hash TEXT NOT NULL, document_id TEXT, mtime_ns INTEGER, size INTEGER)")
+    connection.execute("CREATE TABLE IF NOT EXISTS documents(path TEXT PRIMARY KEY, content_hash TEXT NOT NULL, document_id TEXT, mtime_ns INTEGER, size INTEGER, lifecycle TEXT)")
     columns = {row[1] for row in connection.execute("PRAGMA table_info(documents)")}
     if "document_id" not in columns:
         connection.execute("ALTER TABLE documents ADD COLUMN document_id TEXT")
@@ -86,12 +89,14 @@ def _sync_index(root: Path, connection: sqlite3.Connection, state: StateStore, *
         connection.execute("ALTER TABLE documents ADD COLUMN mtime_ns INTEGER")
     if "size" not in columns:
         connection.execute("ALTER TABLE documents ADD COLUMN size INTEGER")
+    if "lifecycle" not in columns:
+        connection.execute("ALTER TABLE documents ADD COLUMN lifecycle TEXT")
     index = FtsIndex(connection)
     count = 0
     documents = {
-        path: (content_hash, document_id, mtime_ns, size)
-        for path, content_hash, document_id, mtime_ns, size in connection.execute(
-            "SELECT path, content_hash, document_id, mtime_ns, size FROM documents"
+        path: (content_hash, document_id, mtime_ns, size, lifecycle)
+        for path, content_hash, document_id, mtime_ns, size, lifecycle in connection.execute(
+            "SELECT path, content_hash, document_id, mtime_ns, size, lifecycle FROM documents"
         )
     }
     paths = {
@@ -108,13 +113,15 @@ def _sync_index(root: Path, connection: sqlite3.Connection, state: StateStore, *
     for relative, path in paths.items():
         stat = path.stat()
         previous = documents.get(relative)
-        if not verify_hashes and previous and previous[2:] == (stat.st_mtime_ns, stat.st_size):
+        metadata = (stat.st_mtime_ns, stat.st_size)
+        if not verify_hashes and previous and previous[4] is not None and previous[2:4] == metadata:
             continue
         data = path.read_bytes()
         content_hash = _hash(data)
         if previous and previous[0] == content_hash:
-            if previous[2:] != (stat.st_mtime_ns, stat.st_size):
-                connection.execute("UPDATE documents SET mtime_ns = ?, size = ? WHERE path = ?", (stat.st_mtime_ns, stat.st_size, relative))
+            if previous[2:4] != metadata or previous[4] is None:
+                lifecycle = previous[4] or parse_document(data).fields.get("state", "active")
+                connection.execute("UPDATE documents SET mtime_ns = ?, size = ?, lifecycle = ? WHERE path = ?", (*metadata, lifecycle, relative))
             continue
         document_id = previous[1] if previous else None
         if previous is None:
@@ -125,7 +132,8 @@ def _sync_index(root: Path, connection: sqlite3.Connection, state: StateStore, *
                 moved_from.add(old_path)
                 state.record_event("vault", old_path, content_hash, None, "moved", commit=False)
         state.record_event("vault", relative, previous[0] if previous else None, content_hash, "moved" if previous is None and document_id else content_hash, commit=False)
-        connection.execute("INSERT OR REPLACE INTO documents(path, content_hash, document_id, mtime_ns, size) VALUES (?, ?, ?, ?, ?)", (relative, content_hash, document_id or str(uuid.uuid4()), stat.st_mtime_ns, stat.st_size))
+        lifecycle = parse_document(data).fields.get("state", "active")
+        connection.execute("INSERT OR REPLACE INTO documents(path, content_hash, document_id, mtime_ns, size, lifecycle) VALUES (?, ?, ?, ?, ?, ?)", (relative, content_hash, document_id or str(uuid.uuid4()), *metadata, lifecycle))
         if previous:
             connection.execute("DELETE FROM blocks WHERE path = ?", (relative,))
         for block in _blocks(relative, data):
@@ -151,13 +159,27 @@ def build_index(root: Path) -> int:
         return _build_index(root)
 
 
-def search(root: Path, query: str) -> list[tuple[str, str, str]]:
+def search_details(root: Path, query: str, include_inactive: bool = False) -> list[dict]:
     if not (root / ".kbkit" / "profile.toml").is_file():
         raise ValueError("vault is not initialized")
     with file_lock(root / ".kbkit" / "maintenance.lock"):
         _build_index(root, verify_hashes=False)
         with closing(sqlite3.connect(_index_path(root))) as connection:
-            return FtsIndex(connection).search(query)
+            statuses = KnowledgeVault(root).statuses()
+            placeholders = ", ".join("?" for _ in INACTIVE_STATES)
+            for path, lifecycle in connection.execute(
+                f"SELECT path, lifecycle FROM documents WHERE lifecycle IN ({placeholders})", tuple(INACTIVE_STATES)
+            ):
+                statuses.setdefault(path, {"state": lifecycle, "reason": "frontmatter"})
+            return [
+                {"path": path, "block_id": block_id, "content": content, **statuses.get(path, {"state": "active"})}
+                for path, block_id, content in FtsIndex(connection).search(query)
+                if include_inactive or statuses.get(path, {}).get("state") not in INACTIVE_STATES
+            ]
+
+
+def search(root: Path, query: str) -> list[tuple[str, str, str]]:
+    return [(hit["path"], hit["block_id"], hit["content"]) for hit in search_details(root, query)]
 
 
 def read(root: Path, relative_path: str) -> str:
@@ -174,6 +196,8 @@ def maintain(root: Path) -> dict:
         state = StateStore(root)
         run_id = state.start_task("maintenance")
         try:
+            knowledge = KnowledgeVault(root)
+            code_sync = refresh_code(knowledge)
             blocks = _build_index(root)
             graph = build_graph(root)
             findings = lint(root)
@@ -184,11 +208,13 @@ def maintain(root: Path) -> dict:
             expired = state.expire_missing_findings(findings)
             with closing(sqlite3.connect(_index_path(root))) as connection:
                 indexed_blocks = connection.execute("SELECT count(*) FROM blocks").fetchone()[0]
-            report = {"run_id": run_id, "status": "succeeded", "blocks": indexed_blocks, "changed_blocks": blocks, "graph": graph, "findings": findings, "expired_proposals": expired, "proposals": len(state.list_proposals("pending"))}
+            status = "partial" if any(row["status"] in {"conflicted", "unverified"} for row in code_sync) else "succeeded"
+            report = {"run_id": run_id, "status": status, "blocks": indexed_blocks, "changed_blocks": blocks, "graph": graph, "findings": findings, "expired_proposals": expired, "proposals": len(state.list_proposals("pending")),
+                      "code_sync": code_sync, "knowledge": knowledge.statuses()}
             report_path = root / ".kbkit" / "reports" / f"{run_id}.json"
             report_path.parent.mkdir(parents=True, exist_ok=True)
             report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-            state.finish_task(run_id, "succeeded", str(report_path.relative_to(root)))
+            state.finish_task(run_id, status, str(report_path.relative_to(root)))
             return {**report, "report_path": str(report_path)}
         except Exception as exc:
             state.finish_task(run_id, "failed")

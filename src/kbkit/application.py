@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .core import build_index, init_vault, maintain, read, search
+from .core import build_index, init_vault, maintain, read, search_details
+from .knowledge import KnowledgeVault
 from .registry import VaultRegistry
 from .state import StateStore
 from .writer import apply_proposal
@@ -28,14 +29,16 @@ class ApplicationService:
     def index(self) -> dict:
         return {"blocks": build_index(self.vault)}
 
-    def search(self, query: str) -> dict:
-        return {"hits": [{"path": path, "block_id": block_id, "content": content} for path, block_id, content in search(self.vault, query)]}
+    def search(self, query: str, include_inactive: bool = False) -> dict:
+        return {"hits": search_details(self.vault, query, include_inactive)}
 
     def read(self, relative_path: str) -> dict:
-        return {"path": relative_path, "content": read(self.vault, relative_path)}
+        return {"path": relative_path, "content": read(self.vault, relative_path),
+                **KnowledgeVault(self.vault).statuses().get(Path(relative_path).as_posix(), {})}
 
     def status(self) -> dict:
-        return {"vault": str(self.vault), "initialized": (self.vault / ".kbkit" / "profile.toml").exists()}
+        return {"vault": str(self.vault), "initialized": (self.vault / ".kbkit" / "profile.toml").exists(),
+                "knowledge": KnowledgeVault(self.vault).statuses()}
 
     def maintain(self) -> dict:
         return maintain(self.vault)

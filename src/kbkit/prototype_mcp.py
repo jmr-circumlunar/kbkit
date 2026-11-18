@@ -42,7 +42,7 @@ def handle(message: dict, service: ApplicationService | None = None) -> dict:
         result = {"tools": [
             {"name": "kb_status", "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}},
             {"name": "kb_index", "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}},
-            {"name": "kb_search", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
+            {"name": "kb_search", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "include_inactive": {"type": "boolean"}}, "required": ["query"]}},
             {"name": "kb_read", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}},
             {"name": "kb_maintain", "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}},
             {"name": "kb_proposals", "inputSchema": {"type": "object", "properties": {"status": {"type": "string"}}}},
@@ -63,7 +63,10 @@ def handle(message: dict, service: ApplicationService | None = None) -> dict:
             elif name == "kb_search":
                 if not isinstance(arguments.get("query"), str) or not arguments["query"].strip():
                     return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32602, "message": "query must be a non-empty string"}}
-                payload = service.search(arguments["query"])
+                include_inactive = arguments.get("include_inactive", False)
+                if not isinstance(include_inactive, bool):
+                    raise ValueError("include_inactive must be a boolean")
+                payload = service.search(arguments["query"], include_inactive)
             elif name == "kb_read":
                 if not isinstance(arguments.get("path"), str) or not arguments["path"].strip():
                     return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32602, "message": "path must be a non-empty string"}}

@@ -2,7 +2,7 @@
 
 ## Project phase
 
-kbkit is currently in planning and architecture-contract phase. Do not add placeholder modules simply to fill the planned module count. Confirm requirements, module boundaries, data contracts, failure semantics, and tests before implementation.
+kbkit is preparing its first release. The README describes verified user workflows. Record release evidence for the exact Git commit or tag in the E8 acceptance report.
 
 ## Development setup
 
@@ -28,7 +28,7 @@ Use the Python version currently configured in pyproject.toml, create a virtual 
 - CLI, Python API, and MCP call the same application services.
 - Ambiguous writes fail closed; destructive operations require explicit authorization.
 - Unknown Markdown syntax must not be silently rewritten or dropped.
-- Git integration operates only on an explicitly bound user vault, never implicitly on the kbkit development repository.
+- Git writes apply only to the chosen vault. Code knowledge bindings read authorized paths and refs from the named local repository.
 
 ## Commit convention
 

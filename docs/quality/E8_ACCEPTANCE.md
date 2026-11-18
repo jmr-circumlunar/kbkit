@@ -25,7 +25,7 @@ SQLite：3.51.0
 
 ## 当前自动化证据
 
-- 开发版测试总数：58，全部通过。
+- 开发版既有候选测试数：58，全部通过。库内治理和代码同步按本页运行手册独立复验。
 - E2 原型、E3 核心、E4 事务和恢复、E5 graph/lint/lifecycle、E6 Git/backup、E7 Skill/MCP 分发测试均通过。
 - 本机 Windows 独立进程锁竞争测试通过。
 - 临时干净 venv editable 安装通过。

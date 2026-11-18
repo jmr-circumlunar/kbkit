@@ -8,8 +8,8 @@ kbkit-api-version: v1
 
 Use `kb_search` for retrieval and `kb_read` for source content.
 
-- Preserve `relative_path`, `block_id`, line range, freshness and provenance fields.
-- Treat `stale`, `index_dirty` and `partial` as visible result states.
-- Use field, lifecycle and visibility filters when the request implies them.
+- Preserve `path`, `block_id`, and any freshness state and reason.
+- Default search omits inactive pages. Use `include_inactive: true` only when the task needs historical or potentially stale material, and cite the state.
+- Use `knowledge history` to retrieve reviewed design revisions. Use the commit and path cited by a generated implementation map to verify an implementation claim.
 - Read the Markdown source before presenting a high-confidence answer.
 - Do not infer facts from an index snippet when the source file cannot be read.

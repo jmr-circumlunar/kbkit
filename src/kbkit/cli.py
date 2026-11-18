@@ -25,6 +25,7 @@ def build_parser() -> argparse.ArgumentParser:
     search_parser = subparsers.add_parser("search", help="Search indexed blocks.")
     search_parser.add_argument("path", type=str)
     search_parser.add_argument("query", type=str)
+    search_parser.add_argument("--include-inactive", action="store_true", help="Include labeled historical and stale hits.")
     read_parser = subparsers.add_parser("read", help="Read a Markdown file.")
     read_parser.add_argument("path", type=str)
     read_parser.add_argument("relative_path", type=str)
@@ -44,6 +45,24 @@ def build_parser() -> argparse.ArgumentParser:
     proposal_parser.add_argument("proposal_id", nargs="?")
     recover_parser = subparsers.add_parser("recover", help="Recover pending transactions.")
     recover_parser.add_argument("path", type=str)
+    knowledge_parser = subparsers.add_parser("knowledge", help="Review knowledge revisions and bind committed code sources.")
+    knowledge_commands = knowledge_parser.add_subparsers(dest="knowledge_action", required=True)
+    review = knowledge_commands.add_parser("review")
+    review.add_argument("vault", type=Path)
+    review.add_argument("page")
+    review.add_argument("--depends-on", action="append")
+    history = knowledge_commands.add_parser("history")
+    history.add_argument("vault", type=Path)
+    history.add_argument("page")
+    history.add_argument("--revision", type=int)
+    knowledge_status = knowledge_commands.add_parser("status")
+    knowledge_status.add_argument("vault", type=Path)
+    code = knowledge_commands.add_parser("bind-code")
+    code.add_argument("vault", type=Path)
+    code.add_argument("source")
+    code.add_argument("repository", type=Path)
+    code.add_argument("--ref", required=True)
+    code.add_argument("--scope", action="append", required=True)
     return parser
 
 
@@ -77,8 +96,32 @@ def main() -> int:
             sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
             sys.stdout.flush()
         return 0
+    if args.command == "knowledge":
+        from .code_sync import bind_code
+        from .git_adapter import GitUnavailable
+        from .knowledge import KnowledgeVault
+        from .prototype_lock import file_lock
+
+        try:
+            if not (args.vault / ".kbkit" / "profile.toml").is_file():
+                raise ValueError("vault is not initialized")
+            with file_lock(args.vault / ".kbkit" / "maintenance.lock"):
+                knowledge = KnowledgeVault(args.vault)
+                if args.knowledge_action == "review":
+                    result = knowledge.review(args.page, args.depends_on)
+                elif args.knowledge_action == "history":
+                    result = knowledge.history(args.page, args.revision)
+                elif args.knowledge_action == "status":
+                    result = knowledge.statuses()
+                else:
+                    result = bind_code(knowledge, args.source, args.repository, args.ref, args.scope)
+        except (OSError, ValueError, GitUnavailable) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
     if args.command in {"init", "index", "search", "read", "task", "maintain", "proposal", "recover", "add", "use", "current"}:
-        from .core import build_index, init_vault, maintain, read, search
+        from .core import build_index, init_vault, maintain, read, search_details
         from .registry import VaultRegistry
         from .state import StateStore
 
@@ -108,8 +151,9 @@ def main() -> int:
             registry.close()
             return 0
         if args.command == "maintain":
-            print(maintain(root))
-            return 0
+            report = maintain(root)
+            print(report)
+            return int(report["status"] != "succeeded")
         if args.command == "recover":
             from .transaction import recover_transaction
 
@@ -142,11 +186,16 @@ def main() -> int:
         if args.command == "index":
             print(f"blocks: {build_index(root)}")
         elif args.command == "search":
-            for path, block_id, content in search(root, args.query):
-                print(f"{path}\t{block_id}\t{content}")
+            for hit in search_details(root, args.query, args.include_inactive):
+                if args.include_inactive:
+                    print(json.dumps(hit, ensure_ascii=False))
+                else:
+                    print(f"{hit['path']}\t{hit['block_id']}\t{hit['content']}")
         elif args.command == "read":
             sys.stdout.write(read(root, args.relative_path))
         else:
-            print(maintain(root))
+            report = maintain(root)
+            print(report)
+            return int(report["status"] != "succeeded")
         return 0
     return 0

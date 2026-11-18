@@ -8,6 +8,7 @@
 - 用户后续可以在 Agent 宿主中自行修改或暂停定时任务，kbkit 下次运行时读取最新配置。
 - kbkit 在 `.kbkit/automation.json` 保存宿主名称、schedule、enabled、任务 ID 和配置版本，作为审计记录，不替代宿主的调度实现。
 - 宿主不可用时，用户可以手动触发 Skill 或使用 kbkit runner。
+- 已执行 `knowledge bind-code` 的来源随 `task run` 或 `kb_maintain` 一起处理。绑定授权该来源的固定实现索引页。下方通用生成和模型配置属于扩展策略。
 
 ## 默认配置
 

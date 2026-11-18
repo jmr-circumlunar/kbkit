@@ -1,55 +1,33 @@
 # kbkit
 
-面向 AI Agent 的通用本地 Markdown 知识库基础设施组件套件。
+kbkit 是面向 AI Agent 的本地 Markdown 知识库组件。它提供块级检索、CLI、stdio MCP 和可导入的 Skill。知识库用普通 Markdown 保存，可用现有编辑器查看和编辑。索引可以重建，核心运行无需模型或第三方 Python 运行时依赖。
 
-kbkit 为 Markdown 文件知识库提供块级检索、读取、写入、图谱、治理、版本和自动化能力。Obsidian、VS Code、Typora 等第三方工具负责预览和人工编辑。
+**发布状态**：0.1.0 候选，公开分发及宿主矩阵以 [E8 验收记录](docs/quality/E8_ACCEPTANCE.md) 为准。
 
-**kbkit 不提供 Web Viewer、Web UI、Markdown 渲染器或编辑器。**
+## 从 Git 安装
 
-项目采用 Apache-2.0 开源许可。用户可以直接从 Git 仓库获取源码，并通过仓库内的 `skills/` 目录让 Agent 加载 onboarding、query、author、maintenance 和 file-ingest 能力。
+准备 Python 3.11–3.13（含 SQLite FTS5）。Git 用于克隆源码，也用于可选的代码知识同步。以下是 Windows PowerShell 示例。
 
-> **项目状态：E8 独立验收准备阶段。** E1 至 E7 的核心设计、实现和本地测试已经完成，真实 Agent 宿主互操作和正式发布验收仍待执行。
+```powershell
+git clone https://github.com/jmr-circumlunar/kbkit.git
+cd kbkit
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --no-deps .
+.\.venv\Scripts\python.exe -m kbkit doctor
+```
 
-## 目标
+从候选分支或发布标签验证时，在创建虚拟环境前切换到验收指定的引用。需要记录实际克隆的完整 SHA。
 
-- Markdown 原文是知识内容的唯一权威来源。
-- SQLite FTS5 索引可重建，正文命中后回源读取。
-- CLI、Python API、MCP 共用同一应用服务和数据契约。
-- 写入具备预检、dry-run、冲突检测、事务恢复和审计。
-- 核心运行时零第三方依赖，默认离线、本地运行。
-- Git、模型服务和计划任务为可选能力。
+## 交给 Agent 使用
 
-## 工程基线
+1. 把 Git 仓库地址交给 Agent，请它按本页安装并询问知识库路径。Skill 在 `skills/`。Codex 可导入这五个目录到使用项目的 `.agents/skills/`，支持其他加载方式的宿主按其约定导入。
+2. Agent 用虚拟环境的 Python 执行 `python -m kbkit init <vault>`。需要 MCP 时，宿主使用同一个 Python 执行 `python -m kbkit mcp stdio`，环境变量 `KBKIT_VAULT` 指向库的绝对路径。
+3. 使用 `kb_write_plan` 和 `kb_write_apply` 创建第一篇笔记，再用 `kb_search` 和 `kb_read` 验证。手动维护执行 `python -m kbkit task run <vault>`。需要定时维护时，Agent 首次确认频率和范围，由对应宿主保存计划。日常执行直接写报告。
 
-- 当前脚手架：Python 3.11+
-- 包布局：src layout
-- 核心运行时：Python 标准库
-- 测试：unittest
-- 首要开发/验收平台：Windows
-- Linux：CI 兼容性烟测；正式支持承诺待定
+## 知识自维护
 
-## 文档
+- 检索前同步检测到的 Markdown 变动。定时维护补做内容哈希核验、链接和 lint 检查。
+- `knowledge review` 保存设计等知识页的已复核版本和显式依赖。关联依据变化、缺失或失效时，下游从默认检索退出。`knowledge history` 可读取先前复核版。
+- `knowledge bind-code` 绑定授权的本地 Git ref 和路径。维护任务按提交自动更新对应的实现索引页，并保留来源 SHA、文件路径和 Python 顶层符号。代码正文保留在仓库。普通笔记的结论由 Agent 对照变更后更新并复核。
 
-从 docs/README.md 开始，查看产品范围、需求、架构、模块地图、数据布局、接口、事务协议、测试用例、验收标准和路线。
-
-原始设计输入保存在 docs/source/，新的方案和决策在 docs 下持续演进。
-
-## Windows 开发环境
-
-    git clone https://github.com/jmr-circumlunar/kbkit.git
-    cd kbkit
-    py -3.11 -m venv .venv
-    .\.venv\Scripts\Activate.ps1
-    python -m pip install -e .
-    python -m unittest discover -s tests -v
-    python -m kbkit doctor
-
-当前 CLI 已支持 init、index、search、read、maintain、proposal、recover、MCP stdio 和 vault registry 操作。完整发布能力以 E8 验收报告为准。
-
-## 从新 Agent 开始
-
-让 Agent 从仓库地址克隆源码，按上面的命令创建虚拟环境并安装。Skill 位于仓库的 `skills/` 目录。Codex 可将五个 Skill 目录复制到使用项目的 `.agents/skills/`，再由宿主发现。其他宿主可按自己的方式加载这些目录。若宿主缺少 Skill 加载入口，可让 Agent 直接读取对应的 `SKILL.md`。
-
-使用虚拟环境的 Python 执行 `python -m kbkit init <vault>`。Agent 通过 `python -m kbkit mcp stdio` 启动按会话运行的服务，环境变量 `KBKIT_VAULT` 指向初始化时选定的绝对路径。可用工具由 `tools/list` 返回。CLI 维护入口为 `python -m kbkit task run <vault>`。
-
-检索会同步检测到的本地 Markdown 变更。手动索引或维护会逐文件核验内容哈希。代码仓库、外部文件和会话派生知识的自动刷新仍需接入来源跟踪，见 [信息新鲜度与漂移处理](docs/architecture/KNOWLEDGE_FRESHNESS.md)。
+操作示例与边界见 [知识治理使用指南](docs/architecture/KNOWLEDGE_FRESHNESS.md)。功能范围和验收见 [文档索引](docs/README.md) 与 [变更记录](CHANGELOG.md)。项目采用 [Apache-2.0](LICENSE) 许可。
