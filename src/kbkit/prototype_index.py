@@ -10,8 +10,18 @@ import zlib
 _HAN_RUN = re.compile(r"([\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U0002fa1f\U00030000-\U000323af]+)")
 
 
+class _HanTokens(dict[int, str]):
+    def __missing__(self, codepoint: int) -> str:
+        token = f"h{codepoint:x} "
+        self[codepoint] = token
+        return token
+
+
+_HAN_TOKENS = _HanTokens()
+
+
 def _han_phrase(text: str) -> str:
-    return " ".join(f"h{ord(char):x}" for char in text)
+    return text.translate(_HAN_TOKENS).rstrip(" ")
 
 
 def _search_tokens(content: str) -> tuple[str, str]:
