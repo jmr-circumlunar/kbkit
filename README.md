@@ -2,14 +2,14 @@
 
 kbkit 是面向 AI Agent 的本地 Markdown 知识库组件。它提供块级检索、CLI、stdio MCP 和可导入的 Skill。知识库用普通 Markdown 保存，可用现有编辑器查看和编辑。索引可以重建，核心运行无需模型或第三方 Python 运行时依赖。
 
-**发布状态**：0.1.0 候选，公开分发及宿主矩阵以 [E8 验收记录](docs/quality/E8_ACCEPTANCE.md) 为准。
+**发布状态**：0.1.0 候选可从公开测试分支安装。分发及宿主矩阵见 [E8 验收记录](docs/quality/E8_ACCEPTANCE.md)。
 
 ## 从 Git 安装
 
 准备 Python 3.11–3.13（含 SQLite FTS5）。Git 用于克隆源码，也用于可选的代码知识同步。以下是 Windows PowerShell 示例。
 
 ```powershell
-git clone https://github.com/jmr-circumlunar/kbkit.git
+git clone --branch test/release-compact-index https://github.com/jmr-circumlunar/kbkit.git
 cd kbkit
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --no-deps .

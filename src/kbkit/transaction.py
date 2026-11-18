@@ -79,6 +79,7 @@ def restore_from_trash(root: Path, entry_id: str) -> dict:
 
 
 def plan_append(root: Path, operations: list[dict], dry_run: bool = True) -> dict:
+    root = root.resolve()
     changes: list[PlannedChange] = []
     seen: set[str] = set()
     for operation in operations:
@@ -87,8 +88,6 @@ def plan_append(root: Path, operations: list[dict], dry_run: bool = True) -> dic
         selector = operation.get("selector") or {"path": operation.get("path", "")}
         target = resolve_selector(root, selector)
         relative = target.relative_to(root).as_posix()
-        if not relative or root.resolve() not in target.parents or target.suffix.lower() != ".md":
-            raise TransactionError("path is outside the vault")
         if relative in seen:
             raise TransactionError("ambiguous repeated selector")
         seen.add(relative)
@@ -102,6 +101,7 @@ def plan_append(root: Path, operations: list[dict], dry_run: bool = True) -> dic
 
 
 def plan_operations(root: Path, operations: list[dict], dry_run: bool = True) -> dict:
+    root = root.resolve()
     changes: list[PlannedChange] = []
     seen: set[str] = set()
     for operation in operations:
@@ -109,8 +109,6 @@ def plan_operations(root: Path, operations: list[dict], dry_run: bool = True) ->
         selector = operation.get("selector") or {"path": operation.get("path", "")}
         target = resolve_selector(root, selector, allow_missing_path=kind == "create")
         relative = target.relative_to(root).as_posix()
-        if not relative or root.resolve() not in target.parents or target.suffix.lower() != ".md":
-            raise TransactionError("path is outside the vault")
         if relative in seen:
             raise TransactionError("ambiguous repeated selector")
         seen.add(relative)
@@ -131,12 +129,12 @@ def plan_operations(root: Path, operations: list[dict], dry_run: bool = True) ->
         elif kind in {"move", "rename"}:
             destination = operation.get("destination", "")
             destination_path = (root / destination).resolve()
-            if root.resolve() not in destination_path.parents or destination_path.suffix.lower() != ".md":
+            if root not in destination_path.parents or destination_path.suffix.lower() != ".md":
                 raise TransactionError("destination is outside the vault")
             if destination_path.exists():
                 raise TransactionError("destination already exists")
             changes.append(PlannedChange(relative, digest(before), b""))
-            changes.append(PlannedChange(destination, digest(b""), before))
+            changes.append(PlannedChange(destination_path.relative_to(root).as_posix(), digest(b""), before))
         else:
             raise TransactionError("unsupported operation")
     return {"transaction_id": str(uuid.uuid4()), "dry_run": dry_run, "changes": changes}

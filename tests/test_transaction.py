@@ -2,6 +2,7 @@ import hashlib
 import json
 import tempfile
 import unittest
+from contextlib import chdir
 from pathlib import Path
 
 from kbkit.transaction import TransactionError, apply_plan, delete_to_trash, digest, plan_append, plan_operations, recover_transaction, restore_from_trash
@@ -14,7 +15,8 @@ class CreateTransactionTests(unittest.TestCase):
             root = Path(directory)
             path = root / "first.md"
             request = [{"operation": "create", "path": "first.md", "content": "# First\n"}]
-            plan = plan_operations(root, request)
+            with chdir(root.parent):
+                plan = plan_operations(Path(root.name), request)
             self.assertFalse(path.exists())
             path.touch()
             with self.assertRaises(TransactionError):
@@ -33,7 +35,8 @@ class TransactionTests(unittest.TestCase):
             root = Path(directory)
             (root / "a.md").write_bytes(b"a")
             (root / "b.md").write_bytes(b"b")
-            plan = plan_append(root, [{"operation": "append", "path": "a.md", "content": "1", "expected_hash": digest(b"a")}, {"operation": "append", "path": "b.md", "content": "2", "expected_hash": digest(b"b")}])
+            with chdir(root.parent):
+                plan = plan_append(Path(root.name), [{"operation": "append", "path": "a.md", "content": "1", "expected_hash": digest(b"a")}, {"operation": "append", "path": "b.md", "content": "2", "expected_hash": digest(b"b")}])
             self.assertTrue(plan["dry_run"])
             self.assertEqual((root / "a.md").read_bytes(), b"a")
             result = apply_plan(root, plan)
@@ -86,7 +89,7 @@ class TransactionTests(unittest.TestCase):
             path.write_text("note", encoding="utf-8")
             with self.assertRaises(SelectorError):
                 resolve_selector(root, {"path": "note.md", "block_id": "note.md:0"})
-            self.assertEqual(resolve_selector(root, {"block_id": "note.md:0"}), path)
+            self.assertEqual(resolve_selector(root, {"block_id": "note.md:0"}), path.resolve())
 
     def test_delete_uses_trash_and_can_restore(self):
         with tempfile.TemporaryDirectory() as directory:

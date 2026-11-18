@@ -2,6 +2,7 @@ import tempfile
 import unittest
 import os
 import shutil
+from contextlib import closing
 from unittest.mock import patch
 from pathlib import Path
 
@@ -44,8 +45,8 @@ class CoreTests(unittest.TestCase):
                         registry.add(duplicate, identity="moved")
                     copied_id = registry.add(duplicate, identity="copy")
                     self.assertNotEqual(copied_id, original_id)
-                    self.assertEqual(registry.use(original_id), original)
-                    self.assertEqual(registry.use(copied_id), duplicate)
+                    self.assertEqual(registry.use(original_id), original.resolve())
+                    self.assertEqual(registry.use(copied_id), duplicate.resolve())
                 finally:
                     registry.close()
 
@@ -65,7 +66,7 @@ class CoreTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "choose --identity"):
                         registry.add(destination)
                     self.assertEqual(registry.add(destination, identity="moved"), original_id)
-                    self.assertEqual(registry.current(), destination)
+                    self.assertEqual(registry.current(), destination.resolve())
                 finally:
                     registry.close()
                 self.assertEqual(ApplicationService(destination).search("portabilitytoken")["hits"], original_hits)
@@ -117,17 +118,16 @@ class CoreTests(unittest.TestCase):
     def test_registry_can_switch_vaults(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            registry = VaultRegistry(root / "registry")
             first = root / "one"
             second = root / "two"
             init_vault(first)
             init_vault(second)
-            first_id = registry.add(first)
-            second_id = registry.add(second)
-            self.assertEqual(registry.current(), second)
-            self.assertEqual(registry.use(first_id), first)
-            self.assertNotEqual(first_id, second_id)
-            registry.close()
+            with closing(VaultRegistry(root / "registry")) as registry:
+                first_id = registry.add(first)
+                second_id = registry.add(second)
+                self.assertEqual(registry.current(), second.resolve())
+                self.assertEqual(registry.use(first_id), first.resolve())
+                self.assertNotEqual(first_id, second_id)
 
     def test_approved_proposal_applies_with_hash_check(self):
         with tempfile.TemporaryDirectory() as directory:

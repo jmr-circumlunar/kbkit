@@ -9,7 +9,7 @@ SQLite：3.51.0
 
 当前为 **有条件未通过**。核心离线能力、数据搬运、Markdown 兼容、事务协议、Git 可选能力和本地分发已有证据。Agent 宿主互操作、完整 MCP 客户端验证、断电级耐久性和发布 artifact 仍待完成。
 
-2026-11-18 的空白 Agent 公开分发验收在初始化失败。远端默认分支为 `6997e5b6d7e0b04e80f9eccb8e3091b77458ab9c`，仅有 `doctor`。本页其余本地证据对应开发工作区。见 [功能模拟验证报告](FUNCTIONAL_SIMULATION_REPORT.md)。
+2026-11-18，公开测试分支 `test/release-compact-index` 的 `7f768b89452b31c5b51fafefc5736baa88fc144b` 通过 Windows Python 3.11、3.12、3.13 的新克隆验收。默认分支仍为 `6997e5b6d7e0b04e80f9eccb8e3091b77458ab9c`，仅提供 `doctor`。首次公开默认分支验收见 [功能模拟验证报告](FUNCTIONAL_SIMULATION_REPORT.md)。
 
 ## I1–I7
 
@@ -20,7 +20,7 @@ SQLite：3.51.0
 | I3 零第三方运行时依赖 | 通过 | `pyproject.toml` dependencies 为空，干净 venv 安装通过 |
 | I4 数据可搬运 | Windows 跨路径通过 | 移动保留 UUID，副本获得独立 UUID。同 UUID 并存时索引也按位置隔离。跨系统报告待补 |
 | I5 格式通用 | 部分通过 | BOM、CRLF、Frontmatter round-trip 测试通过，第三方编辑器矩阵待补 |
-| I6 分发即用 | 公开分发未通过 | 本地 clean venv 和临时 zipapp 通过，GitHub 新克隆无法初始化知识库 |
+| I6 分发即用 | 公开测试分支通过 | Windows 三版本从公开候选干净克隆、安装、初始化和运行 zipapp；默认分支尚未切换 |
 | I7 Agent 能力完整 | 部分通过 | Codex 原生接入和官方 Python SDK 核心交互已验证，完整宿主矩阵和持久调度待验证 |
 
 ## 当前自动化证据
@@ -58,6 +58,8 @@ SQLite：3.51.0
 已在本地 `test/release-portability` 的 `530b31914afa4123737899459b8611ff33481522` 复验。Windows build 26200 上，Python 3.11.18、3.12.14、3.13.9 各自通过干净克隆安装、62 项测试、MCP、库内治理、代码提交同步和副本隔离。wheel 在构建完成后离线安装。运行探针拒绝 Python 的网络解析、连接和发送操作，仍成功初始化、写入、检索、读取和 lint。三套环境的独立构建得到相同 zipapp SHA-256 `443795be7480ddec043ea550ced2a7c073a77c8f6e9aca8164f468030fba83e5`。Linux、公开 Git 克隆和完整宿主矩阵仍待验证。
 
 ## 发布阻塞项
+
+首轮 [GitHub Actions 矩阵](https://github.com/jmr-circumlunar/kbkit/actions/runs/44260270418) 在 `7f768b8` 上通过 Ubuntu 三版本。三个 Windows Server 作业发现短路径别名和规范路径混用，事务预检拒绝同一库路径，部分测试也直接比较了不同表示。候选修复统一事务根目录为规范路径，并保留实际路径及事务用例重新验证。
 
 中文检索候选 `c66eb3ab802782088247536f858e03c4338cf38c` 位于本地 `test/release-retrieval`。Windows Python 3.11、3.12、3.13 各通过 65 项测试。连续中文、混合词、标识符、排除归档和旧索引重建通过。万篇短文场景的查询和建索引延迟达标，索引体积为原文的 6.37 倍，超过 2.5 倍目标。见 [规模检索报告](SCALE_SEARCH_REPORT.md)。
 
