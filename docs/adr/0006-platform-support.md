@@ -1,6 +1,6 @@
 # ADR-0006：平台支持策略
 
-- 状态：Proposed
+- 状态：Accepted
 - 日期：2026-11-17
 
 ## 背景
@@ -18,3 +18,5 @@
 ## 验证
 
 Windows 版本矩阵、Python/SQLite/FTS5 版本、路径语义、文件锁、replace、任务调度、zipapp 运行行为。
+
+E1 决定：Python 3.11、3.12、3.13 纳入支持矩阵。Windows NTFS 是第一正式验收平台，Linux 只做 CI 烟测，macOS 暂不承诺。

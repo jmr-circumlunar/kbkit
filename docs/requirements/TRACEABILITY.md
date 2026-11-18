@@ -18,6 +18,8 @@
 | FR-016 接口一致性 | cli_adapter、mcp_adapter、application services | ENV、MCP-001–004、CLI/Python contract tests 待补 |
 | FR-017 模型辅助 | model_adapter | SRCH-012/013、SEC-005 |
 | FR-018 分发 | package/build config | PKG-001/002 |
+| FR-019/020 自成长与提案 | change_event、session_artifact、task_runner、proposal_engine | AUTO-001–010、PROP-001–006 |
+| FR-021 Agent 驱动运维 | skill_resources、mcp_adapter、application services | AGENT-001–006 |
 
 ## 追踪规则
 

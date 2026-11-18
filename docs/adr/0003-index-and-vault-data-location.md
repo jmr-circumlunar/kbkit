@@ -1,6 +1,6 @@
 # ADR-0003：Vault 配置、事务数据与外置索引分区
 
-- 状态：Proposed
+- 状态：Accepted
 - 日期：2026-11-17
 
 ## 背景
@@ -20,3 +20,5 @@
 ## 验证
 
 移动 vault、复制 vault、UUID 冲突、删除索引重建、用户 Git 状态、同卷 staging 和目录清理策略。
+
+E1 决定：可重建 SQLite 索引默认位于 `%LOCALAPPDATA%\\kbkit\\indexes\\<vault_uuid>`。profile 和事务数据仍留在 vault 的 `.kbkit` 内，最终清理规则由 E2 原型验证。

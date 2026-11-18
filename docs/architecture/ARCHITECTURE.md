@@ -11,13 +11,14 @@ Obsidian、VS Code、Typora、任意 Markdown 编辑器直接打开知识库目�
 - CLI：人类、脚本和自动化入口。
 - Python API：开发者入口。
 - MCP Server：Agent 工具入口。
+- Skill：Agent 的使用规则和安全操作说明，作为版本化文本资源随仓库分发。
 - 可选 HTTP 模型客户端：只用于用户显式配置的模型辅助，不是核心入口。
 
 所有入口必须调用同一应用服务，不允许 CLI/MCP 各自复制业务逻辑。
 
 ### 引擎层
 
-由领域模型、应用服务和能力模块组成，覆盖 workspace、Markdown、index、search、graph、writer/transaction、governance、Git、tasks、templates、registry 等能力。
+由领域模型、应用服务和能力模块组成，覆盖 workspace、Markdown、index、search、graph、writer/transaction、governance、Git、tasks、change events、session artifacts、proposals、templates、registry 等能力。
 
 ### 存储层
 
@@ -66,7 +67,7 @@ Obsidian、VS Code、Typora、任意 Markdown 编辑器直接打开知识库目�
 
 ## 5. 可选能力边界
 
-Git、模型服务、计划任务和 MCP 传输扩展均可选。未配置时，核心读写检索仍可用。可选适配器不能把依赖传染到核心包。
+Git、模型服务、计划任务和 MCP 传输扩展均可选。未配置时，核心读写检索和确定性自维护仍可用。可选适配器不能把依赖传染到核心包。Agent 集成、Skill、MCP、服务启动和自动化边界见 `AGENT_INTEGRATION.md` 与 `SELF_GROWING_KB.md`。
 
 ## 6. 架构冻结前的验证
 

@@ -4,7 +4,7 @@
 
 ## 当前结论
 
-项目方向可行，当前工作重点从“马上开发功能”调整为“先冻结产品边界、数据契约、接口契约、事务保证和测试体系”。
+项目方向可行。E1 至 E7 的设计、核心实现和本地测试已完成，当前进入 E8 独立验收。
 
 ## 已确认
 
@@ -23,33 +23,29 @@
 - 建立产品范围、需求清单、总体架构、边界、候选模块地图、数据布局、数据模型、接口契约、Markdown 兼容、事务协议、安全模型。
 - 建立测试策略、测试用例、性能评测、独立性验收和需求追踪。
 - 建立 ADR-0001 至 ADR-0007。
+- 冻结 Python 3.11–3.13 支持矩阵、核心零依赖原则、LOCALAPPDATA 索引位置、事务保证边界、Markdown round-trip 原则和 Windows 首发平台策略。
+- 建立代码规范条约和 E1 退出评审记录。
+- 明确组件定位为自成长知识库体系，冻结 vault、审核、代码和授权会话四类变化来源。安全动作和隔离生成页可由定时任务直接执行并留审计，高影响变化进入 proposal 和 Agent 处理。
 - 移除未经用户确认的 MIT License 元数据。
 - GitHub Actions 当前工程骨架 CI 通过：Windows/Linux × Python 3.11/3.12/3.13，共 6 个 job。
 
-## 尚未完成
+## E8 尚未完成
 
-- 用户本机 Windows 环境尚未执行安装与验收。
-- 原始 M0 性能数据尚未在本仓库复现。
-- 原始详细 DESIGN.md、CAPABILITIES.md、FOCUS.md、SYNC.md 尚未取得并对照。
-- 36 个模块仍是候选清单，需与原始编号/影响矩阵核对。
-- P0 ADR 尚未全部从 Proposed 转为 Accepted。
-- 核心业务功能尚未开始实现。
+- 原始 M0 性能数据仍作为历史基线，尚未形成正式发布门禁。
+- 真实 Agent 宿主和第三方 MCP 客户端互操作尚未验收。
+- 第三方 Markdown 编辑器兼容矩阵尚未验收。
+- 正式 release tag 和 artifact 尚未发布。
+- 断电级 durability 尚未验证，当前按未承诺处理。
 
-## 当前 P0 待决
+## 当前 E8 待办
 
-1. Python 最低版本与正式平台支持范围。
-2. 核心零第三方依赖的精确定义，以及 MCP 首发是否只支持 stdio。
-3. block_id 稳定身份规则。
-4. Frontmatter YAML 子集语法与写回策略。
-5. 外置索引使用 %APPDATA% 还是 %LOCALAPPDATA%，profile 是否进入用户 Git。
-6. Windows 多文件事务的进程崩溃、系统崩溃和断电保证边界。
-7. 原始独立性判据 I8 是否遗漏。
-8. License 与公开发布策略。
+1. Agent 宿主 Skill 加载和 MCP 互操作。
+2. 正式 tag、zipapp artifact 和发布记录。
+3. 第三方编辑器兼容性。
+4. 断电级 durability 的证据或排除声明。
 
 ## 下一步
 
-1. 对照补充的原始详细设计文件，校准模块清单、CLI 命令表和变更影响矩阵。
-2. 评审 P0 ADR，确定哪些可以接受、哪些需要改。
-3. 完成 Windows 技术原型：FTS5、Markdown round-trip、文件锁、ReplaceFileW/FlushFileBuffers、事务故障注入。
-4. 冻结测试 fixture 和 golden set 结构。
-5. 通过 E1 后再进入 E2/E3，不提前铺开空模块。
+1. 按 `docs/quality/E8_RUNBOOK.md` 执行外部验收。
+2. 将外部结果写入 E8 报告。
+3. 根据结果决定发布或回到对应阶段修复。

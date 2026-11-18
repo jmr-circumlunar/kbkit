@@ -6,7 +6,9 @@ kbkit 为 Markdown 文件知识库提供块级检索、读取、写入、图谱�
 
 **kbkit 不提供 Web Viewer、Web UI、Markdown 渲染器或编辑器。**
 
-> **项目状态：规划与架构契约阶段。** 当前仓库已建立最小 Python 工程骨架和 CI；核心业务能力尚未实现，原始 M0 性能数据尚待复现。
+项目采用 Apache-2.0 开源许可。用户可以直接从 Git 仓库获取源码，并通过仓库内的 `skills/` 目录让 Agent 加载 onboarding、query、author、maintenance 和 file-ingest 能力。
+
+> **项目状态：E8 独立验收准备阶段。** E1 至 E7 的核心设计、实现和本地测试已经完成，真实 Agent 宿主互操作和正式发布验收仍待执行。
 
 ## 目标
 
@@ -17,7 +19,7 @@ kbkit 为 Markdown 文件知识库提供块级检索、读取、写入、图谱�
 - 核心运行时零第三方依赖，默认离线、本地运行。
 - Git、模型服务和计划任务为可选能力。
 
-## 工程基线（待 ADR 最终冻结）
+## 工程基线
 
 - 当前脚手架：Python 3.11+
 - 包布局：src layout
@@ -42,4 +44,12 @@ kbkit 为 Markdown 文件知识库提供块级检索、读取、写入、图谱�
     python -m unittest discover -s tests -v
     python -m kbkit doctor
 
-注意：当前 CLI 仅为工程引导占位，不代表 init/search/write 等产品能力已经实现。
+当前 CLI 已支持 init、index、search、read、maintain、proposal、recover、MCP stdio 和 vault registry 操作。完整发布能力以 E8 验收报告为准。
+
+## 从新 Agent 开始
+
+让 Agent 从仓库地址克隆源码，按上面的命令创建虚拟环境并安装。项目级 Skill 位于仓库的 `skills/` 目录。让 Agent 按宿主提供的方式加载 `kb-onboard`、`kb-query`、`kb-author`、`kb-maintain` 和 `kb-ingest`。若宿主缺少 Skill 加载入口，可让 Agent 直接读取对应的 `SKILL.md`。
+
+使用虚拟环境的 Python 执行 `python -m kbkit init <vault>`。Agent 通过 `python -m kbkit mcp stdio` 启动按会话运行的服务，环境变量 `KBKIT_VAULT` 指向初始化时选定的绝对路径。可用工具由 `tools/list` 返回。CLI 维护入口为 `python -m kbkit task run <vault>`。
+
+检索会同步检测到的本地 Markdown 变更。手动索引或维护会逐文件核验内容哈希。代码仓库、外部文件和会话派生知识的自动刷新仍需接入来源跟踪，见 [信息新鲜度与漂移处理](docs/architecture/KNOWLEDGE_FRESHNESS.md)。

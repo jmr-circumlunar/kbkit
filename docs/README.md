@@ -14,12 +14,22 @@
 8. Markdown 兼容策略：architecture/MARKDOWN_COMPATIBILITY.md
 9. 写入与事务协议：architecture/TRANSACTION_PROTOCOL.md
 10. 安全模型：architecture/SECURITY_MODEL.md
-11. 测试策略与用例：quality/TEST_STRATEGY.md、quality/TEST_CASES.md
-12. 性能与检索评测：quality/PERFORMANCE_AND_EVAL.md
-13. 独立性验收：quality/ACCEPTANCE.md
-14. 实施路线：implementation/ROADMAP.md
-15. Windows 开发环境：implementation/WINDOWS_ENVIRONMENT.md
-16. 证据与引用登记：research/EVIDENCE_REGISTER.md
+11. E1 决策登记：architecture/E1_DECISION_REGISTER.md
+12. Agent 集成、Skill、服务与自动化：architecture/AGENT_INTEGRATION.md
+13. 自成长知识库架构：architecture/SELF_GROWING_KB.md
+14. 自动化配置契约：architecture/AUTOMATION_CONFIG.md
+15. 测试策略与用例：quality/TEST_STRATEGY.md、quality/TEST_CASES.md
+16. 性能与检索评测：quality/PERFORMANCE_AND_EVAL.md
+17. 独立性验收：quality/ACCEPTANCE.md
+18. E2 退出评审：quality/E2_EXIT_REVIEW.md
+19. E3 退出评审：quality/E3_EXIT_REVIEW.md
+20. E8 当前验收报告：quality/E8_ACCEPTANCE.md
+21. Skill 兼容矩阵：quality/SKILL_COMPATIBILITY.md
+22. E8 外部验收运行手册：quality/E8_RUNBOOK.md
+23. 功能模拟验证报告：quality/FUNCTIONAL_SIMULATION_REPORT.md
+24. 实施路线：implementation/ROADMAP.md
+25. Windows 开发环境：implementation/WINDOWS_ENVIRONMENT.md
+26. 证据与引用登记：research/EVIDENCE_REGISTER.md
 
 ## 状态标签
 
@@ -44,7 +54,7 @@
 
 ## 当前阶段
 
-E0 远程仓库骨架已建立；Windows 本地环境尚未验收。当前处于 E1 规划与架构契约阶段。不得把占位 CLI、基础测试或已有 M0 汇总数据描述为完整产品能力。
+E0 远程仓库骨架、本机 Python 3.13.9 验收、E1 至 E7 的本地实现和测试已经完成。当前处于 E8 独立验收，外部 Agent 宿主互操作、正式发布证据和断电级 durability 仍待完成。不得把本地测试结果描述为完整发布验收。
 
 
 ## 项目状态与测试资料
@@ -58,3 +68,5 @@ E0 远程仓库骨架已建立；Windows 本地环境尚未验收。当前处于
 
 - 数据模型：architecture/DATA_MODEL.md
 - 需求—模块—测试追踪：requirements/TRACEABILITY.md
+- 代码规范与工程约束：engineering/CODE_STYLE.md
+- E1 退出评审：quality/E1_EXIT_REVIEW.md

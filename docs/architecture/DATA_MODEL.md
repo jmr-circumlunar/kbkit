@@ -17,6 +17,9 @@
 | TransactionJournal | transaction_id、state、targets、before_hash、after_hash、staging_ref、created_at | 崩溃恢复记录 |
 | Proposal | proposal_id、risk_level、reason、diff_ref、owner、due_at、status | 需要人工决策的治理提案 |
 | TaskDefinition | task_id、schedule、action、enabled、last_run、next_run | 定时巡检/维护任务 |
+| ChangeEvent | event_id、source_kind、source_ref、observed_at、before_hash、after_hash、cursor | 记录 vault、代码、会话和审核变化 |
+| SessionArtifact | artifact_id、session_ref、captured_at、content_hash、retention、consent | 受控保存会话摘要或原始片段 |
+| TaskRun | run_id、task_id、started_at、finished_at、status、input_cursor、report_ref | 自动化运行和失败审计 |
 
 ## 2. Frontmatter 字段候选字典
 
