@@ -15,6 +15,14 @@ py -3.13 -m venv .venv
 
 判定要求是测试全通过，doctor 报告 FTS5 可用。随后由 Agent 初始化临时 vault，使用 MCP 写入和查询，再通过外部编辑器或普通文件写入改动，验证下次检索反映改动。执行一次维护并确认报告实际落盘。索引目录、注册目录和 vault 都使用临时路径。
 
+可用 `scripts/verify_release.py` 从任意明确的 Git URL 重跑基础验收。脚本克隆到新目录并从该提交安装。JSON 结果记录 SHA、运行时、通过阶段、当前阻塞以及同一提交的两份独立检出能否生成一致的 zipapp。传入 `--branch` 可指定候选分支或标签，`--expect-sha` 可锁定验收提交。
+
+```powershell
+python scripts/verify_release.py https://github.com/jmr-circumlunar/kbkit.git --branch <branch-or-tag> --expect-sha <full-sha>
+```
+
+脚本覆盖实际 stdio 调用和 Skill 文件发现。空白 Agent 自主安装、宿主原生 Skill 加载、持久计划和第三方编辑器仍按各自的验收项记录。
+
 ## Skill 加载
 
 从仓库读取以下文件并记录宿主名称、Skill 版本和加载结果：

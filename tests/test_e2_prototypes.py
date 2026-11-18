@@ -34,9 +34,12 @@ class E2PrototypeTests(unittest.TestCase):
     def test_fts5_probe_and_search(self):
         self.assertTrue(fts5_available())
         connection = sqlite3.connect(":memory:")
-        index = FtsIndex(connection)
-        index.replace_block("a.md", "b1", "agent knowledge")
-        self.assertEqual(index.search("knowledge")[0][:2], ("a.md", "b1"))
+        try:
+            index = FtsIndex(connection)
+            index.replace_block("a.md", "b1", "agent knowledge")
+            self.assertEqual(index.search("knowledge")[0][:2], ("a.md", "b1"))
+        finally:
+            connection.close()
 
     def test_markdown_roundtrip_preserves_body(self):
         raw = b"\xef\xbb\xbf---\r\nstate: draft\r\ntags: old\r\n---\r\n# Title\r\n\r\nbody\r\n"
