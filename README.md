@@ -20,7 +20,7 @@ python -m venv .venv
 
 ## 交给 Agent 使用
 
-1. 把 Git 仓库地址交给 Agent，请它按本页安装并询问知识库路径。Skill 在 `skills/`。Codex 可导入这五个目录到使用项目的 `.agents/skills/`，支持其他加载方式的宿主按其约定导入。
+1. 把 Git 仓库地址交给 Agent，请它按本页安装并询问知识库路径。Skill 在 `skills/`。Codex 项目使用 `.agents/skills/`，Claude Code 项目使用 `.claude/skills/`。实际宿主验收情况见 [Skill 兼容矩阵](docs/quality/SKILL_COMPATIBILITY.md)。
 2. Agent 用虚拟环境的 Python 执行 `python -m kbkit init <vault>`。需要 MCP 时，宿主使用同一个 Python 执行 `python -m kbkit mcp stdio`，环境变量 `KBKIT_VAULT` 指向库的绝对路径。
 3. 使用 `kb_write_plan` 和 `kb_write_apply` 创建第一篇笔记，再用 `kb_search` 和 `kb_read` 验证。手动维护执行 `python -m kbkit task run <vault>`。需要定时维护时，Agent 首次确认频率和范围，由对应宿主保存计划。日常执行直接写报告。
 
