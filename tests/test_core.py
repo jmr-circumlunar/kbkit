@@ -2,6 +2,7 @@ import tempfile
 import unittest
 import os
 import shutil
+import sqlite3
 from contextlib import closing
 from unittest.mock import patch
 from pathlib import Path
@@ -17,6 +18,35 @@ from kbkit.git_adapter import commit, status
 
 
 class CoreTests(unittest.TestCase):
+    def test_applied_write_reports_index_failure_without_losing_transaction_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_vault(root)
+            app = ApplicationService(root)
+            with patch("kbkit.application.build_index", side_effect=sqlite3.OperationalError("index unavailable")):
+                result = app.apply_operations([{"operation": "create", "path": "report.md", "content": "savedcontent"}])
+            self.assertEqual(result["state"], "applied")
+            self.assertEqual((root / "report.md").read_text(encoding="utf-8"), "savedcontent")
+            self.assertTrue(result["index_dirty"])
+            self.assertEqual(result["consistency"], {"ok": False, "errors": ["index unavailable"]})
+            self.assertEqual(app.index()["blocks"], 1)
+            self.assertEqual([hit["path"] for hit in app.search("savedcontent")["hits"]], ["report.md"])
+
+    def test_sqlite_index_leaves_space_for_journal_in_deep_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory).resolve()
+            vault = base / "vault"
+            init_vault(vault)
+            legacy_suffix_length = len("/00000000-0000-0000-0000-000000000000/" + "0" * 64 + ".sqlite")
+            child_length = 257 - len(str(base)) - 1 - legacy_suffix_length
+            self.assertGreater(child_length, 0)
+            with patch.dict(os.environ, {"KBKIT_INDEX_DIR": str(base / ("d" * child_length))}):
+                app = ApplicationService(vault)
+                result = app.apply_operations([{"operation": "create", "path": "deep.md", "content": "deeppath"}])
+                self.assertEqual(result["state"], "applied")
+                self.assertFalse(result["index_dirty"])
+                self.assertEqual([hit["path"] for hit in app.search("deeppath")["hits"]], ["deep.md"])
+
     def test_copied_vaults_never_share_index_and_explicit_copy_gets_own_id(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)

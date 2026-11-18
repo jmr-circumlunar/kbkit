@@ -61,6 +61,8 @@ SQLite：3.51.0
 
 首轮 [GitHub Actions 矩阵](https://github.com/jmr-circumlunar/kbkit/actions/runs/44260270418) 在 `7f768b8` 上通过 Ubuntu 三版本。三个 Windows Server 作业发现短路径别名和规范路径混用，事务预检拒绝同一库路径，部分测试也直接比较了不同表示。候选修复统一事务根目录为规范路径，并保留实际路径及事务用例重新验证。
 
+短路径修复候选 `5f25e92` 在 [复跑矩阵](https://github.com/jmr-circumlunar/kbkit/actions/runs/44261583608) 通过全部六项，并通过 Windows 三版本公开克隆。独立验收在深层索引目录复现了第二个 Windows 问题：正文已写入，SQLite 打开超过日志路径预算的索引失败，工具只返回数据库错误。候选将派生索引文件名缩短，并分开报告正文事务状态和 `index_dirty`，以便单独恢复索引。
+
 中文检索候选 `c66eb3ab802782088247536f858e03c4338cf38c` 位于本地 `test/release-retrieval`。Windows Python 3.11、3.12、3.13 各通过 65 项测试。连续中文、混合词、标识符、排除归档和旧索引重建通过。万篇短文场景的查询和建索引延迟达标，索引体积为原文的 6.37 倍，超过 2.5 倍目标。见 [规模检索报告](SCALE_SEARCH_REPORT.md)。
 
 压缩索引候选 `74ccca2b208597ef461fe4e358f1f464176b0c8a` 位于本地 `test/release-compact-index`。Windows Python 3.11.18、3.12.14、3.13.9 的独立 Git 克隆各通过 66 项测试，zipapp SHA-256 均为 `92b0f61e7c5655ad4309e2508da72ca5edfb01c0837b3e30008e5a764a76dbde`。万篇、十万块、104 MB 中文长文合成语料的全量构建、单篇增量、中文及标识符查询、索引体积达标。实测分别为 52.386 秒、0.523 秒、156.5 和 140.7 毫秒 P95、原文 1.21 倍。同一候选的万篇短文索引为原文 4.41 倍，尚未达到 2.5 倍目标。真实用户库仍待度量，公开 GitHub 地址仍未提供该候选。

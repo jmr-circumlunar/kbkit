@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import closing
 from pathlib import Path
+import sqlite3
 
 from .core import build_index, init_vault, maintain, read, search_details
 from .knowledge import KnowledgeVault
@@ -50,9 +51,7 @@ class ApplicationService:
         return {"proposals": rows}
 
     def apply_proposal(self, proposal_id: str) -> dict:
-        result = apply_proposal(self.vault, proposal_id)
-        build_index(self.vault)
-        return result
+        return self._refresh_after_write(apply_proposal(self.vault, proposal_id))
 
     def plan_operations(self, operations: list[dict]) -> dict:
         plan = plan_operations(self.vault, operations, dry_run=True)
@@ -60,9 +59,17 @@ class ApplicationService:
 
     def apply_operations(self, operations: list[dict]) -> dict:
         plan = plan_operations(self.vault, operations, dry_run=False)
-        result = apply_plan(self.vault, plan)
-        build_index(self.vault)
-        result["consistency"] = check_consistency(self.vault)
+        return self._refresh_after_write(apply_plan(self.vault, plan))
+
+    def _refresh_after_write(self, result: dict) -> dict:
+        try:
+            build_index(self.vault)
+            result["consistency"] = check_consistency(self.vault)
+        except (OSError, sqlite3.Error, ValueError) as error:
+            result["consistency"] = {"ok": False, "errors": [str(error)]}
+        result["index_dirty"] = not result["consistency"]["ok"]
+        if result["index_dirty"]:
+            result["index_hint"] = "The transaction state is reported separately. Fix the index error and run kb_index."
         return result
 
     def graph(self) -> dict:

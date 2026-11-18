@@ -41,4 +41,5 @@ def index_path(root: Path, *, create: bool = False) -> Path:
     folder = base / vault_id(root)
     if create:
         folder.mkdir(parents=True, exist_ok=True)
-    return folder / f"{hashlib.sha256(location).hexdigest()}.sqlite"
+    # 128 bits keep locations separate while leaving room for SQLite journal suffixes.
+    return folder / f"{hashlib.sha256(location).hexdigest()[:32]}.sqlite"
