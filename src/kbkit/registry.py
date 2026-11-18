@@ -20,17 +20,23 @@ class VaultRegistry:
         self.connection.commit()
 
     def add(self, root: Path, name: str | None = None, *, identity: str | None = None) -> str:
+        if identity not in {None, "moved", "copy"}:
+            raise ValueError("identity must be moved or copy")
         root = root.resolve()
-        value = vault_id(root)
-        previous = self.connection.execute("SELECT path FROM vaults WHERE vault_uuid = ?", (value,)).fetchone()
-        else_where = previous is not None and Path(previous[0]) != root
-        if else_where and identity is None:
-            raise ValueError("vault UUID already registered at a different path; choose --identity moved or --identity copy")
-        if identity == "moved" and else_where and (Path(previous[0]) / ".kbkit" / "profile.toml").is_file():
-            raise ValueError("the original vault still exists; register this as a copy")
-        if identity == "copy" and (else_where or previous is None):
-            value = assign_copy_id(root)
         with self.connection:
+            self.connection.execute("BEGIN IMMEDIATE")
+            value = vault_id(root)
+            previous = self.connection.execute("SELECT path FROM vaults WHERE vault_uuid = ?", (value,)).fetchone()
+            different_location = previous is not None and Path(previous[0]) != root
+            if different_location and identity is None:
+                raise ValueError("vault UUID already registered at a different path; choose --identity moved or --identity copy")
+            if identity == "moved" and different_location and (Path(previous[0]) / ".kbkit" / "profile.toml").is_file():
+                raise ValueError("the original vault still exists; register this as a copy")
+            if identity == "copy" and (different_location or previous is None):
+                registered = self.connection.execute("SELECT 1 FROM vaults WHERE path = ?", (str(root),)).fetchone()
+                if registered:
+                    raise ValueError("this path is already registered with a different UUID")
+                value = assign_copy_id(root)
             self.connection.execute(
                 "INSERT INTO vaults VALUES (?, ?, ?) ON CONFLICT(vault_uuid) DO UPDATE SET path = excluded.path, name = excluded.name",
                 (value, str(root), name or root.name),

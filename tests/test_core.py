@@ -38,6 +38,8 @@ class CoreTests(unittest.TestCase):
                 try:
                     with self.assertRaisesRegex(ValueError, "choose --identity"):
                         registry.add(duplicate)
+                    with self.assertRaisesRegex(ValueError, "identity must"):
+                        registry.add(duplicate, identity="invalid")
                     with self.assertRaisesRegex(ValueError, "original vault still exists"):
                         registry.add(duplicate, identity="moved")
                     copied_id = registry.add(duplicate, identity="copy")
