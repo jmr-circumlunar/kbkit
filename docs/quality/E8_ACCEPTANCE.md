@@ -59,6 +59,8 @@ SQLite：3.51.0
 
 ## 发布阻塞项
 
+中文检索候选 `c66eb3ab802782088247536f858e03c4338cf38c` 位于本地 `test/release-retrieval`。Windows Python 3.11、3.12、3.13 各通过 65 项测试。连续中文、混合词、标识符、排除归档和旧索引重建通过。万篇短文场景的查询和建索引延迟达标，索引体积为原文的 6.37 倍，超过 2.5 倍目标。见 [规模检索报告](SCALE_SEARCH_REPORT.md)。
+
 MCP 补测候选 `c6e71440264ca1491699f2208e86a0a8c6a52a9a` 位于本地 `test/release-mcp`。官方 Python SDK 1.30.0 在隔离客户端环境通过 `2025-11-25` 握手、ping、八个工具发现、中文路径写入和读取、搜索及维护报告。结构化工具响应通过客户端解析。旧版本的 initialized 错误回包及 ping 失败已复现。Windows Python 3.11.18、3.12.14、3.13.9 对新候选各通过 63 项测试，独立 zipapp 构建 SHA-256 均为 `9869e95041a4026cdc2406f36f4fe94d284173808d5233ba5498955bd7f6d1df`。协议参考 [生命周期](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle) 和 [Ping](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/ping)。
 
 1. 真实 MCP 客户端互操作矩阵。

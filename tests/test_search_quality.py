@@ -10,6 +10,23 @@ from kbkit.vault_profile import index_path
 
 
 class SearchQualityTests(unittest.TestCase):
+    def test_compact_index_replaces_and_deletes_chinese_postings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_vault(root)
+            original = root / "guide.md"
+            original.write_text("# 实施流程\n\n" + "使用旧版连接池复核方案。\n" * 40, encoding="utf-8")
+            other = root / "other.md"
+            other.write_text("# 备用流程\n\n使用连接池复核方案。", encoding="utf-8")
+            app = ApplicationService(root)
+            hit = app.search("旧版")["hits"][0]
+            self.assertIn("旧版连接池复核方案", hit["content"])
+            original.write_text("# 实施流程\n\n" + "使用新版连接池复核方案。\n" * 40, encoding="utf-8")
+            self.assertEqual(app.search("旧版")["hits"], [])
+            self.assertEqual([row["path"] for row in app.search("新版")["hits"]], [original.name])
+            original.unlink()
+            self.assertEqual([row["path"] for row in app.search("连接池")["hits"]], [other.name])
+
     def test_chinese_and_identifier_golden_cases(self):
         documents = {
             "design.md": "# 数据库连接池设计",

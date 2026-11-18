@@ -124,7 +124,7 @@ def _sync_index(root: Path, connection: sqlite3.Connection, state: StateStore, *
         lifecycle = parse_document(data).fields.get("state", "active")
         connection.execute("INSERT OR REPLACE INTO documents(path, content_hash, document_id, mtime_ns, size, lifecycle) VALUES (?, ?, ?, ?, ?, ?)", (relative, content_hash, document_id or str(uuid.uuid4()), *metadata, lifecycle))
         if previous:
-            connection.execute("DELETE FROM blocks WHERE path = ?", (relative,))
+            index.delete_blocks(relative)
         for block in _blocks(relative, data):
             index.insert_block(block.path, block.block_id, f"{block.heading}\n{block.content}", commit=False)
             count += 1
@@ -132,7 +132,7 @@ def _sync_index(root: Path, connection: sqlite3.Connection, state: StateStore, *
         if relative not in moved_from:
             state.record_event("vault", relative, documents[relative][0], None, "deleted", commit=False)
         connection.execute("DELETE FROM documents WHERE path = ?", (relative,))
-        connection.execute("DELETE FROM blocks WHERE path = ?", (relative,))
+        index.delete_blocks(relative)
     return count
 
 
@@ -197,7 +197,7 @@ def maintain(root: Path) -> dict:
                     state.create_proposal(risk, finding["message"], finding)
             expired = state.expire_missing_findings(findings)
             with closing(sqlite3.connect(index_path(root))) as connection:
-                indexed_blocks = connection.execute("SELECT count(*) FROM blocks").fetchone()[0]
+                indexed_blocks = FtsIndex(connection).count()
             status = "partial" if any(row["status"] in {"conflicted", "unverified"} for row in code_sync) else "succeeded"
             report = {"run_id": run_id, "status": status, "blocks": indexed_blocks, "changed_blocks": blocks, "graph": graph, "findings": findings, "expired_proposals": expired, "proposals": len(state.list_proposals("pending")),
                       "code_sync": code_sync, "knowledge": knowledge.statuses()}
