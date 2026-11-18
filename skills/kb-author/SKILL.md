@@ -6,7 +6,7 @@ kbkit-api-version: v1
 
 # kbkit authoring
 
-Use `kb_write_plan` for preview and `kb_write_apply` for application. For a new Markdown note, the current service accepts an `append` operation with `path` and `content`. Ensure the destination directory exists.
+Use `kb_write_plan` for preview and `kb_write_apply` for application. To write the first note, send `{"operations":[{"operation":"create","path":"first-note.md","content":"# First note\n\nLocal knowledge"}]}` to both tools. Ensure the destination directory exists. Use `append` for adding to existing files.
 
 1. Select a block or document with an explicit selector.
 2. Call `kb_write_plan` first and inspect the returned change paths. Compare the intended content with the current file in the Agent when a textual diff is needed.

@@ -48,7 +48,7 @@ kbkit 为 Markdown 文件知识库提供块级检索、读取、写入、图谱�
 
 ## 从新 Agent 开始
 
-让 Agent 从仓库地址克隆源码，按上面的命令创建虚拟环境并安装。项目级 Skill 位于仓库的 `skills/` 目录。让 Agent 按宿主提供的方式加载 `kb-onboard`、`kb-query`、`kb-author`、`kb-maintain` 和 `kb-ingest`。若宿主缺少 Skill 加载入口，可让 Agent 直接读取对应的 `SKILL.md`。
+让 Agent 从仓库地址克隆源码，按上面的命令创建虚拟环境并安装。Skill 位于仓库的 `skills/` 目录。Codex 可将五个 Skill 目录复制到使用项目的 `.agents/skills/`，再由宿主发现。其他宿主可按自己的方式加载这些目录。若宿主缺少 Skill 加载入口，可让 Agent 直接读取对应的 `SKILL.md`。
 
 使用虚拟环境的 Python 执行 `python -m kbkit init <vault>`。Agent 通过 `python -m kbkit mcp stdio` 启动按会话运行的服务，环境变量 `KBKIT_VAULT` 指向初始化时选定的绝对路径。可用工具由 `tools/list` 返回。CLI 维护入口为 `python -m kbkit task run <vault>`。
 

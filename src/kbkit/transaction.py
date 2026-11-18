@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +22,7 @@ class PlannedChange:
     relative_path: str
     before_hash: str
     after: bytes
+    create_only: bool = False
 
 
 class TransactionError(ValueError):
@@ -90,7 +93,7 @@ def plan_operations(root: Path, operations: list[dict], dry_run: bool = True) ->
     for operation in operations:
         kind = operation.get("operation")
         selector = operation.get("selector") or {"path": operation.get("path", "")}
-        target = resolve_selector(root, selector)
+        target = resolve_selector(root, selector, allow_missing_path=kind == "create")
         relative = target.relative_to(root).as_posix()
         if not relative or root.resolve() not in target.parents or target.suffix.lower() != ".md":
             raise TransactionError("path is outside the vault")
@@ -100,7 +103,13 @@ def plan_operations(root: Path, operations: list[dict], dry_run: bool = True) ->
         before = target.read_bytes() if target.exists() else b""
         if operation.get("expected_hash") and operation["expected_hash"] != digest(before):
             raise TransactionError(f"hash conflict: {relative}")
-        if kind == "append":
+        if kind == "create":
+            if set(selector) != {"path"} or target.exists() or not target.parent.is_dir():
+                raise TransactionError("create requires a new Markdown path in an existing directory")
+            if {".git", ".kbkit"}.intersection(Path(relative).parts):
+                raise TransactionError("create path is reserved")
+            changes.append(PlannedChange(relative, digest(b""), operation["content"].encode("utf-8"), create_only=True))
+        elif kind == "append":
             after = before + operation.get("content", "").encode("utf-8")
             changes.append(PlannedChange(relative, digest(before), after))
         elif kind == "delete":
@@ -123,6 +132,8 @@ def apply_plan(root: Path, plan: dict, fail_after: int | None = None) -> dict:
     changes: list[PlannedChange] = plan["changes"]
     for change in changes:
         target = (root / change.relative_path).resolve()
+        if change.create_only and target.exists():
+            raise TransactionError(f"concurrent creation: {change.relative_path}")
         current = target.read_bytes() if target.exists() else b""
         if digest(current) != change.before_hash:
             raise TransactionError(f"concurrent edit: {change.relative_path}")
@@ -134,7 +145,7 @@ def apply_plan(root: Path, plan: dict, fail_after: int | None = None) -> dict:
     for index, change in enumerate(changes):
         staging = staging_dir / f"{index}.after"
         staging.write_bytes(change.after)
-        journal_changes.append({"path": change.relative_path, "before_hash": change.before_hash, "after_hash": digest(change.after), "staging": str(staging)})
+        journal_changes.append({"path": change.relative_path, "before_hash": change.before_hash, "after_hash": digest(change.after), "staging": str(staging), "create_only": change.create_only})
     journal.parent.mkdir(parents=True, exist_ok=True)
     journal.write_text(json.dumps({"state": "pending", "transaction_id": plan["transaction_id"], "changes": journal_changes}), encoding="utf-8")
     if fail_after is not None:
@@ -142,10 +153,8 @@ def apply_plan(root: Path, plan: dict, fail_after: int | None = None) -> dict:
             if index >= fail_after:
                 raise RuntimeError("fault injection")
             (root / change.relative_path).write_bytes(change.after)
-        recover_transaction(root, journal)
-    else:
-        recover_transaction(root, journal)
-    return {"transaction_id": plan["transaction_id"], "state": "applied", "paths": [c.relative_path for c in changes]}
+    state = recover_transaction(root, journal)
+    return {"transaction_id": plan["transaction_id"], "state": state, "paths": [c.relative_path for c in changes]}
 
 
 def recover_transaction(root: Path, journal: Path) -> str:
@@ -154,6 +163,22 @@ def recover_transaction(root: Path, journal: Path) -> str:
         return "applied"
     for change in record["changes"]:
         target = (root / change["path"]).resolve()
+        if change.get("create_only"):
+            after = Path(change["staging"]).read_bytes()
+            handle, temporary = tempfile.mkstemp(prefix=".kbkit-create-", dir=target.parent)
+            try:
+                with os.fdopen(handle, "wb") as output:
+                    output.write(after)
+                os.link(temporary, target)
+                continue
+            except FileExistsError:
+                if target.is_file() and digest(target.read_bytes()) == change["after_hash"]:
+                    continue
+                record["state"] = "divergent"
+                journal.write_text(json.dumps(record), encoding="utf-8")
+                return "divergent"
+            finally:
+                Path(temporary).unlink(missing_ok=True)
         current = target.read_bytes() if target.exists() else b""
         current_hash = digest(current)
         if current_hash == change["after_hash"]:

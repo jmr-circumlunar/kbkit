@@ -8,6 +8,25 @@ from kbkit.transaction import TransactionError, apply_plan, delete_to_trash, dig
 from kbkit.selector import SelectorError, resolve_selector
 
 
+class CreateTransactionTests(unittest.TestCase):
+    def test_new_note_is_created_and_existing_file_is_never_overwritten(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "first.md"
+            request = [{"operation": "create", "path": "first.md", "content": "# First\n"}]
+            plan = plan_operations(root, request)
+            self.assertFalse(path.exists())
+            path.touch()
+            with self.assertRaises(TransactionError):
+                apply_plan(root, plan)
+            self.assertEqual(path.read_bytes(), b"")
+            path.unlink()
+            self.assertEqual(apply_plan(root, plan)["state"], "applied")
+            self.assertEqual(path.read_bytes(), b"# First\n")
+            with self.assertRaises(TransactionError):
+                plan_operations(root, request)
+
+
 class TransactionTests(unittest.TestCase):
     def test_dry_run_then_apply_multiple_files(self):
         with tempfile.TemporaryDirectory() as directory:

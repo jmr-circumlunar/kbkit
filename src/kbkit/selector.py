@@ -9,7 +9,7 @@ class SelectorError(ValueError):
     pass
 
 
-def resolve_selector(root: Path, selector: dict) -> Path:
+def resolve_selector(root: Path, selector: dict, *, allow_missing_path: bool = False) -> Path:
     keys = [key for key in ("path", "block_id", "heading_path", "line_range") if selector.get(key) is not None]
     if len(keys) != 1:
         raise SelectorError("selector must contain exactly one locator")
@@ -24,6 +24,6 @@ def resolve_selector(root: Path, selector: dict) -> Path:
     target = (root / relative).resolve()
     if root.resolve() not in target.parents or target.suffix.lower() != ".md":
         raise SelectorError("selector is outside the vault")
-    if not target.exists():
+    if not target.exists() and not (allow_missing_path and keys == ["path"]):
         raise SelectorError("selector matched no file")
     return target

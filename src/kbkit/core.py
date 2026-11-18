@@ -152,7 +152,8 @@ def build_index(root: Path) -> int:
 
 
 def search(root: Path, query: str) -> list[tuple[str, str, str]]:
-    init_vault(root)
+    if not (root / ".kbkit" / "profile.toml").is_file():
+        raise ValueError("vault is not initialized")
     with file_lock(root / ".kbkit" / "maintenance.lock"):
         _build_index(root, verify_hashes=False)
         with closing(sqlite3.connect(_index_path(root))) as connection:

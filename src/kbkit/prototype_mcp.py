@@ -7,6 +7,32 @@ import sqlite3
 from .application import ApplicationService
 
 
+WRITE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "operations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "operation": {"enum": ["create", "append", "delete", "move", "rename"]},
+                    "path": {"type": "string", "description": "Vault-relative Markdown path."},
+                    "selector": {"type": "object"},
+                    "content": {"type": "string"},
+                    "expected_hash": {"type": "string"},
+                    "destination": {"type": "string"},
+                },
+                "required": ["operation"],
+                "anyOf": [{"required": ["path"]}, {"required": ["selector"]}],
+                "if": {"properties": {"operation": {"const": "create"}}},
+                "then": {"required": ["content"]},
+            },
+        },
+    },
+    "required": ["operations"],
+}
+
+
 def handle(message: dict, service: ApplicationService | None = None) -> dict:
     method = message.get("method")
     request_id = message.get("id")
@@ -20,8 +46,8 @@ def handle(message: dict, service: ApplicationService | None = None) -> dict:
             {"name": "kb_read", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}},
             {"name": "kb_maintain", "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}},
             {"name": "kb_proposals", "inputSchema": {"type": "object", "properties": {"status": {"type": "string"}}}},
-            {"name": "kb_write_plan", "inputSchema": {"type": "object", "properties": {"operations": {"type": "array"}}, "required": ["operations"]}},
-            {"name": "kb_write_apply", "inputSchema": {"type": "object", "properties": {"operations": {"type": "array"}}, "required": ["operations"]}},
+            {"name": "kb_write_plan", "inputSchema": WRITE_SCHEMA},
+            {"name": "kb_write_apply", "inputSchema": WRITE_SCHEMA},
         ]}
     elif method == "tools/call":
         if service is None:

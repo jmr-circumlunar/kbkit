@@ -162,6 +162,7 @@ class CoreTests(unittest.TestCase):
     def test_search_syncs_external_edits_copies_and_deletions(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            init_vault(root)
             note = root / "original.md"
             note.write_text("# Note\n\noldtoken", encoding="utf-8")
             self.assertEqual(len(search(root, "oldtoken")), 1)
