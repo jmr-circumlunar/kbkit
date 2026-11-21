@@ -5,38 +5,38 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from .selector import headings, markdown_path
+from .storage import markdown_files
+
 
 WIKILINK = re.compile(r"\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]")
 
 
 def build_graph(root: Path) -> dict:
-    files = {path.stem: path.relative_to(root).as_posix() for path in root.rglob("*.md") if ".kbkit" not in path.parts}
+    paths = markdown_files(root)
+    by_stem = {}
+    for relative in sorted(paths):
+        by_stem.setdefault(Path(relative).stem, []).append(relative)
     edges = []
     broken = []
-    for path in root.rglob("*.md"):
-        if ".kbkit" in path.parts:
-            continue
-        source = path.relative_to(root).as_posix()
+    for source, (path, _) in sorted(paths.items()):
         for target in WIKILINK.findall(path.read_text(encoding="utf-8")):
-            edge = {"source": source, "target": target, "resolved_target": files.get(target)}
+            relative = target if target.lower().endswith(".md") else target + ".md"
+            matches = by_stem.get(Path(target).stem, [])
+            resolved = relative if relative in paths else matches[0] if "/" not in target and len(matches) == 1 else None
+            edge = {"source": source, "target": target, "resolved_target": resolved}
             edges.append(edge)
-            if target not in files:
+            if resolved is None:
                 broken.append(edge)
-    incoming = {path: 0 for path in files.values()}
+    incoming = dict.fromkeys(sorted(paths), 0)
     for edge in edges:
         if edge["resolved_target"]:
             incoming[edge["resolved_target"]] += 1
     orphaned = [path for path, count in incoming.items() if count == 0]
-    return {"edges": edges, "broken": broken, "nodes": sorted(files.values()), "backlinks": incoming, "orphaned": orphaned}
+    return {"edges": edges, "broken": broken, "nodes": sorted(paths), "backlinks": incoming, "orphaned": orphaned}
 
 
 def outline(root: Path, relative_path: str) -> list[dict]:
-    path = (root / relative_path).resolve()
-    if root.resolve() not in path.parents or not path.exists():
-        raise ValueError("document is outside the vault or missing")
-    result = []
-    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        if line.startswith("#") and line.lstrip("#").startswith(" "):
-            level = len(line) - len(line.lstrip("#"))
-            result.append({"level": level, "title": line.lstrip("#").strip(), "line": number})
-    return result
+    raw = markdown_path(root, relative_path).read_bytes()
+    return [{"level": heading.level, "title": heading.path[-1], "heading_path": list(heading.path),
+             "line": heading.start + 1, "lines": [heading.start + 1, heading.end]} for heading in headings(raw)]

@@ -1,66 +1,92 @@
-"""Minimal command-line entry point for the bootstrap package."""
+"""Command-line and stdio entry points."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import shutil
+import sqlite3
 import sys
+import tempfile
 from contextlib import closing
 from pathlib import Path
 
 from . import __version__
+from .application import ApplicationService
+from .code_sync import bind_code
+from .core import init_vault
+from .git_adapter import GitUnavailable
+from .knowledge import KnowledgeVault
+from .prototype_lock import file_lock
+from .prototype_mcp import handle
+from .registry import VaultRegistry
+from .state import StateStore
+from .storage import metadata_dir
+from .transaction import recover_transaction
+from .vault_profile import index_path
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="kbc", description="Manage local Markdown knowledge bases.")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    subparsers = parser.add_subparsers(dest="command")
-    subparsers.add_parser("doctor", help="Check the local Python and SQLite runtime.")
-    mcp_parser = subparsers.add_parser("mcp", help="Run the Agent protocol adapter.")
-    mcp_parser.add_argument("transport", choices=["stdio"])
-    init_parser = subparsers.add_parser("init", help="Initialize a Markdown vault.")
-    init_parser.add_argument("path", type=str)
-    init_parser.add_argument("--identity", choices=["moved", "copy"])
-    index_parser = subparsers.add_parser("index", help="Build the vault index.")
-    index_parser.add_argument("path", type=str)
-    search_parser = subparsers.add_parser("search", help="Search indexed blocks.")
-    search_parser.add_argument("path", type=str)
-    search_parser.add_argument("query", type=str)
-    search_parser.add_argument("--include-inactive", action="store_true", help="Include labeled historical and stale hits.")
-    read_parser = subparsers.add_parser("read", help="Read a Markdown file.")
-    read_parser.add_argument("path", type=str)
-    read_parser.add_argument("relative_path", type=str)
-    task_parser = subparsers.add_parser("task", help="Run a deterministic maintenance task.")
-    task_parser.add_argument("action", choices=["run"])
-    task_parser.add_argument("path", type=str)
-    add_parser = subparsers.add_parser("add", help="Register a vault.")
-    add_parser.add_argument("path", type=str)
-    add_parser.add_argument("--identity", choices=["moved", "copy"])
-    use_parser = subparsers.add_parser("use", help="Select a registered vault.")
-    use_parser.add_argument("vault_uuid", type=str)
-    subparsers.add_parser("current", help="Show the active vault.")
-    maintain_parser = subparsers.add_parser("maintain", help="Run a maintenance scan.")
-    maintain_parser.add_argument("path", type=str)
-    proposal_parser = subparsers.add_parser("proposal", help="Inspect or update proposals.")
-    proposal_parser.add_argument("action", choices=["list", "approve", "reject", "apply"])
-    proposal_parser.add_argument("path", type=str)
-    proposal_parser.add_argument("proposal_id", nargs="?")
-    recover_parser = subparsers.add_parser("recover", help="Recover pending transactions.")
-    recover_parser.add_argument("path", type=str)
-    knowledge_parser = subparsers.add_parser("knowledge", help="Review knowledge revisions and bind committed code sources.")
-    knowledge_commands = knowledge_parser.add_subparsers(dest="knowledge_action", required=True)
-    review = knowledge_commands.add_parser("review")
+    commands = parser.add_subparsers(dest="command")
+    commands.add_parser("doctor", help="Check Python, SQLite FTS5, Git and optional vault configuration.").add_argument("--vault", type=Path)
+    commands.add_parser("mcp", help="Run the Agent protocol adapter.").add_argument("transport", choices=["stdio"])
+    for name in ("init", "add"):
+        command = commands.add_parser(name, help=f"{name.capitalize()} a Markdown vault.")
+        command.add_argument("path", type=Path)
+        command.add_argument("--identity", choices=["moved", "copy"])
+    commands.add_parser("use", help="Select a registered vault.").add_argument("vault_uuid")
+    commands.add_parser("current", help="Show the active vault.")
+
+    for name in ("index", "status", "search", "read", "outline", "graph", "lint", "task", "maintain", "proposal", "recover", "restore"):
+        command = commands.add_parser(name, help=f"Run {name} for a vault.")
+        if name in {"task", "proposal"}:
+            command.add_argument("action", choices=["run"] if name == "task" else ["list", "approve", "reject", "apply"])
+        command.add_argument("path", type=Path)
+        if name in {"search", "status", "outline", "graph", "lint", "task", "maintain", "proposal"}:
+            command.add_argument("--limit", type=int, default=8 if name in {"search", "outline"} else 25)
+            command.add_argument("--offset", type=int, default=0)
+            command.add_argument("--max-bytes", type=int, default=640 if name == "outline" else 36_000)
+        if name == "search":
+            command.add_argument("query")
+            command.add_argument("--include-inactive", action="store_true")
+            command.add_argument("--json", action="store_true")
+            command.add_argument("--max-chars", type=int, default=1200)
+            for option in ("path", "kind", "state", "tags", "symbols", "exclude"):
+                command.add_argument("--" + option, dest=f"filter_{option}", action="append")
+        if name in {"read", "outline"}:
+            command.add_argument("relative_path", nargs="?" if name == "read" else None)
+        if name == "read":
+            selection = command.add_mutually_exclusive_group()
+            selection.add_argument("--heading", action="append")
+            selection.add_argument("--block-id")
+            selection.add_argument("--lines", type=int, nargs=2)
+            command.add_argument("--max-bytes", type=int, default=8000)
+        if name == "graph":
+            command.add_argument("--collection", choices=["edges", "broken", "nodes", "backlinks", "orphaned"], default="edges")
+            command.add_argument("--note")
+        if name in {"task", "maintain"}:
+            command.add_argument("--collection", choices=["findings", "code_sync"], default="findings")
+        if name == "proposal":
+            command.add_argument("proposal_id", nargs="?")
+            command.add_argument("--status")
+        if name == "restore":
+            command.add_argument("entry_id")
+
+    knowledge = commands.add_parser("knowledge", help="Review revisions and bind committed code sources.")
+    actions = knowledge.add_subparsers(dest="knowledge_action", required=True)
+    review = actions.add_parser("review")
     review.add_argument("vault", type=Path)
     review.add_argument("page")
     review.add_argument("--depends-on", action="append")
-    history = knowledge_commands.add_parser("history")
+    history = actions.add_parser("history")
     history.add_argument("vault", type=Path)
     history.add_argument("page")
     history.add_argument("--revision", type=int)
-    knowledge_status = knowledge_commands.add_parser("status")
-    knowledge_status.add_argument("vault", type=Path)
-    code = knowledge_commands.add_parser("bind-code")
+    actions.add_parser("status").add_argument("vault", type=Path)
+    code = actions.add_parser("bind-code")
     code.add_argument("vault", type=Path)
     code.add_argument("source")
     code.add_argument("repository", type=Path)
@@ -69,140 +95,168 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> int:
-    args = build_parser().parse_args()
-    if args.command == "doctor":
-        import sqlite3
+def _json(value) -> None:
+    print(json.dumps(value, ensure_ascii=False))
 
-        print(f"Python: {sys.version.split()[0]}")
-        print(f"SQLite: {sqlite3.sqlite_version}")
-        try:
-            connection = sqlite3.connect(":memory:")
+
+def _doctor(root: Path | None) -> int:
+    print(f"Python: {sys.version.split()[0]} (minimum 3.11)")
+    print(f"SQLite: {sqlite3.sqlite_version}")
+    try:
+        with closing(sqlite3.connect(":memory:")) as connection:
             connection.execute("CREATE VIRTUAL TABLE fts_probe USING fts5(content)")
-            connection.close()
-        except sqlite3.Error as exc:
-            print(f"FTS5: unavailable ({exc})")
-            return 1
-        print("FTS5: available")
+    except sqlite3.Error as exc:
+        print(f"FTS5: unavailable ({exc})")
+        return 1
+    print("FTS5: available")
+    print(f"Git: {'available' if shutil.which('git') else 'unavailable (needed for Git features)'}")
+    if root is None and os.environ.get("KBKIT_VAULT"):
+        root = Path(os.environ["KBKIT_VAULT"])
+    if root is None:
+        print("Vault: use --vault PATH to check initialization and index directory access")
         return 0
-    if args.command == "mcp" and args.transport == "stdio":
-        from .application import ApplicationService
-        from .prototype_mcp import handle
+    root = root.resolve()
+    initialized = (metadata_dir(root) / "profile.toml").is_file()
+    print(f"Vault: {'initialized' if initialized else 'not initialized'} ({root})")
+    if not initialized:
+        return 1
+    try:
+        directory = index_path(root, create=True).parent
+        with tempfile.TemporaryFile(dir=directory):
+            pass
+    except OSError as exc:
+        print(f"Index directory: not writable ({exc})")
+        return 1
+    print(f"Index directory: writable ({directory})")
+    return 0
 
-        vault = Path(os.environ["KBKIT_VAULT"]).resolve() if "KBKIT_VAULT" in os.environ else None
-        service = ApplicationService(vault) if vault else None
 
-        for line in sys.stdin.buffer:
-            if not line.strip():
-                continue
-            try:
-                message = json.loads(line.decode("utf-8"))
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                response = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "invalid JSON"}}
-            else:
-                response = handle(message, service)
-            if response is not None:
-                sys.stdout.buffer.write((json.dumps(response, ensure_ascii=False) + "\n").encode("utf-8"))
-                sys.stdout.buffer.flush()
-        return 0
-    if args.command == "knowledge":
-        from .code_sync import bind_code
-        from .git_adapter import GitUnavailable
-        from .knowledge import KnowledgeVault
-        from .prototype_lock import file_lock
-
+def _stdio() -> int:
+    vault = os.environ.get("KBKIT_VAULT")
+    service = ApplicationService(Path(vault)) if vault else None
+    for line in sys.stdin.buffer:
+        if not line.strip():
+            continue
         try:
-            if not (args.vault / ".kbkit" / "profile.toml").is_file():
-                raise ValueError("vault is not initialized")
-            with file_lock(args.vault / ".kbkit" / "maintenance.lock"):
-                knowledge = KnowledgeVault(args.vault)
-                if args.knowledge_action == "review":
-                    result = knowledge.review(args.page, args.depends_on)
-                elif args.knowledge_action == "history":
-                    result = knowledge.history(args.page, args.revision)
-                elif args.knowledge_action == "status":
-                    result = knowledge.statuses()
-                else:
-                    result = bind_code(knowledge, args.source, args.repository, args.ref, args.scope)
-        except (OSError, ValueError, GitUnavailable) as exc:
-            print(str(exc), file=sys.stderr)
-            return 1
-        print(json.dumps(result, ensure_ascii=False))
-        return 0
-    if args.command in {"init", "index", "search", "read", "task", "maintain", "proposal", "recover", "add", "use", "current"}:
-        from .core import build_index, init_vault, maintain, read, search_details
-        from .registry import VaultRegistry
-        from .state import StateStore
-
-        if args.command == "current":
-            registry = VaultRegistry()
-            current = registry.current()
-            registry.close()
-            if current:
-                print(current)
-            return 0
-        if args.command == "use":
-            registry = VaultRegistry()
-            print(registry.use(args.vault_uuid))
-            registry.close()
-            return 0
-        root = Path(args.path).resolve()
-        if args.command in {"init", "add"}:
-            try:
-                profile = init_vault(root) if args.command == "init" else None
-                with closing(VaultRegistry()) as registry:
-                    vault_uuid = registry.add(root, identity=args.identity)
-            except (ValueError, OSError) as exc:
-                print(str(exc), file=sys.stderr)
-                return 1
-            print(f"profile: {profile}\nvault_uuid: {vault_uuid}" if profile else vault_uuid)
-            return 0
-        if args.command == "maintain":
-            report = maintain(root)
-            print(report)
-            return int(report["status"] != "succeeded")
-        if args.command == "recover":
-            from .transaction import recover_transaction
-
-            transaction_dir = root / ".kbkit" / "transactions"
-            results = []
-            journals = sorted(transaction_dir.glob("*.json")) if transaction_dir.exists() else []
-            for journal in journals:
-                results.append((journal.name, recover_transaction(root, journal)))
-            print(results)
-            return 0
-        if args.command == "proposal":
-            state = StateStore(root)
-            if args.action == "list":
-                for proposal in state.list_proposals():
-                    print(proposal)
-            else:
-                if not args.proposal_id:
-                    raise ValueError("proposal_id is required")
-                if args.action in {"approve", "reject"}:
-                    state.set_proposal_status(args.proposal_id, "approved" if args.action == "approve" else "rejected")
-                    print(args.proposal_id)
-                else:
-                    from .writer import apply_proposal
-
-                    state.close()
-                    print(apply_proposal(root, args.proposal_id))
-                    return 0
-            state.close()
-            return 0
-        if args.command == "index":
-            print(f"blocks: {build_index(root)}")
-        elif args.command == "search":
-            for hit in search_details(root, args.query, args.include_inactive):
-                if args.include_inactive:
-                    print(json.dumps(hit, ensure_ascii=False))
-                else:
-                    print(f"{hit['path']}\t{hit['block_id']}\t{hit['content']}")
-        elif args.command == "read":
-            sys.stdout.write(read(root, args.relative_path))
+            message = json.loads(line.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            response = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "invalid JSON"}}
         else:
-            report = maintain(root)
-            print(report)
-            return int(report["status"] != "succeeded")
+            response = handle(message, service)
+        if response is not None:
+            sys.stdout.buffer.write((json.dumps(response, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8"))
+            sys.stdout.buffer.flush()
+    return 0
+
+
+def _knowledge(args):
+    with file_lock(metadata_dir(args.vault) / "maintenance.lock"):
+        knowledge = KnowledgeVault(args.vault)
+        if args.knowledge_action == "review":
+            return knowledge.review(args.page, args.depends_on)
+        if args.knowledge_action == "history":
+            return knowledge.history(args.page, args.revision)
+        if args.knowledge_action == "status":
+            return knowledge.statuses()
+        return bind_code(knowledge, args.source, args.repository, args.ref, args.scope)
+
+
+def _proposal(service, args, window):
+    if args.action == "list":
+        return service.proposals(args.status, **window)
+    if not args.proposal_id:
+        raise ValueError("proposal_id is required")
+    if args.action == "apply":
+        return service.apply_proposal(args.proposal_id)
+    with closing(StateStore(service.vault)) as state, file_lock(metadata_dir(service.vault) / "maintenance.lock"):
+        row = state.get_proposal(args.proposal_id)
+        if row is None or row[3] not in {"pending", "approved"}:
+            raise ValueError("proposal must exist and be pending or approved")
+        status = "approved" if args.action == "approve" else "rejected"
+        state.set_proposal_status(args.proposal_id, status)
+        return {"proposal_id": args.proposal_id, "status": status}
+
+
+def _vault_command(args) -> int:
+    root = args.path.resolve()
+    service = ApplicationService(root)
+    name = args.command
+    if name in {"init", "add"}:
+        profile = init_vault(root) if name == "init" else None
+        with closing(VaultRegistry()) as registry:
+            identity = registry.add(root, identity=args.identity)
+        print(f"profile: {profile}\nvault_uuid: {identity}" if profile else identity)
         return 0
+    window = {key: getattr(args, key) for key in ("limit", "offset", "max_bytes")} if hasattr(args, "limit") else {}
+    if name == "search":
+        filters = {key: getattr(args, "filter_" + key) for key in ("path", "kind", "state", "tags", "symbols", "exclude")}
+        result = service.search(args.query, args.include_inactive, max_chars=args.max_chars, **filters, **window)
+        if args.json:
+            _json(result)
+        else:
+            for hit in result["hits"]:
+                print(f"{hit['path']}\t{hit['block_id']}\t{hit['content']}")
+            if result["next_offset"] is not None:
+                print(f"More hits: use --offset {result['next_offset']}", file=sys.stderr)
+        return 0
+    if name == "read":
+        result = service.read(args.relative_path, heading=args.heading, block_id=args.block_id,
+                              lines=args.lines, max_bytes=args.max_bytes)
+        if result["truncated"]:
+            _json(result)
+        else:
+            sys.stdout.write(result["content"])
+        return 0
+    if name == "index":
+        print(f"blocks: {service.index()['blocks']}")
+        return 0
+    if name == "outline":
+        result = service.outline(args.relative_path, **window)
+    elif name == "graph":
+        result = service.graph(args.collection, path=args.note, **window)
+    elif name == "proposal":
+        result = _proposal(service, args, window)
+    elif name in {"task", "maintain"}:
+        result = service.maintain(collection=args.collection, **window)
+        _json(result)
+        return int(result["status"] != "succeeded")
+    elif name == "recover":
+        journals = sorted((metadata_dir(root) / "transactions").glob("*.json"))
+        result = {journal.name: recover_transaction(root, journal) for journal in journals}
+    elif name == "restore":
+        result = service.restore(args.entry_id)
+    else:
+        result = getattr(service, name)(**window)
+    _json(result)
+    return 0
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+    if args.command == "mcp":
+        return _stdio()
+    if sys.platform == "win32":
+        for stream in (sys.stdout, sys.stderr):
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+    try:
+        if args.command is None:
+            parser.print_help()
+        elif args.command == "doctor":
+            return _doctor(args.vault)
+        elif args.command == "knowledge":
+            if not (metadata_dir(args.vault) / "profile.toml").is_file():
+                raise ValueError("vault is not initialized; run kbc init first")
+            _json(_knowledge(args))
+        elif args.command in {"use", "current"}:
+            with closing(VaultRegistry()) as registry:
+                value = registry.use(args.vault_uuid) if args.command == "use" else registry.current()
+            if value:
+                print(value)
+        else:
+            return _vault_command(args)
+    except (ValueError, OSError, sqlite3.Error, GitUnavailable) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     return 0

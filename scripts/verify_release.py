@@ -183,7 +183,7 @@ def verify(url: str, branch: str | None, expected_sha: str | None, evidence: dic
         require("oldentry" in code_page.read_text(encoding="utf-8"), "initial code map missing")
         cli("knowledge", "review", str(vault), manual.name, "--depends-on", "_generated/code/demo.md")
         commit("newentry")
-        report = call("kb_maintain")
+        report = call("kb_maintain", collection="code_sync")
         require(report["code_sync"][0]["status"] == "updated" and Path(report["report_path"]).is_file(), "scheduled maintenance report missing code update")
         code = code_page.read_text(encoding="utf-8")
         require("newentry" in code and "oldentry" not in code and "sourcebody" not in code, "code map did not replace old symbols or leaked source body")

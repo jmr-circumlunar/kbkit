@@ -110,7 +110,7 @@ def _refresh(vault: KnowledgeVault, source: str, entry: dict) -> dict:
         target.parent.mkdir(parents=True, exist_ok=True)
         plan = {
             "transaction_id": str(uuid.uuid4()), "dry_run": False,
-            "changes": [PlannedChange(page, before_hash or digest(b""), after, create_only=before is None)],
+            "changes": [PlannedChange(page, before_hash, after, "code_refresh")],
         }
         result = apply_plan(vault.root, plan)
         if result["state"] != "applied":

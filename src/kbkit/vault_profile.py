@@ -9,11 +9,13 @@ import tomllib
 import uuid
 from pathlib import Path
 
+from .storage import metadata_dir
+
 from .transaction import write_atomic
 
 
 def vault_id(root: Path) -> str:
-    profile = root / ".kbkit" / "profile.toml"
+    profile = metadata_dir(root) / "profile.toml"
     with profile.open("rb") as stream:
         data = tomllib.load(stream)
     try:
@@ -23,7 +25,7 @@ def vault_id(root: Path) -> str:
 
 
 def assign_copy_id(root: Path) -> str:
-    profile = root / ".kbkit" / "profile.toml"
+    profile = metadata_dir(root) / "profile.toml"
     value = str(uuid.uuid4())
     original = vault_id(root)
     pattern = rb"(?m)^([ \t]*vault_uuid[ \t]*=[ \t]*)([\"'])([^\r\n]+?)\2"
@@ -36,7 +38,7 @@ def assign_copy_id(root: Path) -> str:
 
 def index_path(root: Path, *, create: bool = False) -> Path:
     configured = os.environ.get("KBKIT_INDEX_DIR")
-    base = Path(configured) if configured else Path(os.environ.get("LOCALAPPDATA", root / ".kbkit")) / "kbkit" / "indexes"
+    base = Path(configured) if configured else Path(os.environ.get("LOCALAPPDATA", metadata_dir(root))) / "kbkit" / "indexes"
     location = os.path.normcase(str(root.resolve())).encode("utf-8")
     folder = base / vault_id(root)
     if create:

@@ -6,26 +6,25 @@ import hashlib
 import zipfile
 from pathlib import Path
 
+from .storage import markdown_files, metadata_dir
+
 
 def create_backup(root: Path, destination: Path) -> dict:
     files = []
     with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for path in sorted(root.rglob("*.md")):
-            if ".kbkit" in path.parts:
-                continue
-            relative = path.relative_to(root).as_posix()
+        for relative, (path, _) in sorted(markdown_files(root).items()):
             archive.write(path, relative)
             files.append(relative)
-        metadata = root / ".kbkit"
+        metadata = metadata_dir(root)
         manifest = metadata / "knowledge.json"
         if manifest.is_file() and not manifest.is_symlink():
-            relative = manifest.relative_to(root).as_posix()
+            relative = ".kbkit/knowledge.json"
             archive.writestr(relative, manifest.read_bytes())
             files.append(relative)
             snapshots = sorted((metadata / "history").glob("*.md"))
             for path in snapshots:
                 if path.is_file() and not path.is_symlink():
-                    relative = path.relative_to(root).as_posix()
+                    relative = f".kbkit/history/{path.name}"
                     archive.write(path, relative)
                     files.append(relative)
     return {"path": str(destination), "files": files}
@@ -42,8 +41,11 @@ def restore_backup(backup: Path, destination: Path) -> dict:
     restored = []
     with zipfile.ZipFile(backup) as archive:
         for member in archive.infolist():
-            target = (destination / member.filename).resolve()
-            if destination.resolve() not in target.parents:
+            name = Path(member.filename)
+            base = metadata_dir(destination).resolve() if name.parts[:1] == (".kbkit",) else destination.resolve()
+            relative = name.parts[1:] if name.parts[:1] == (".kbkit",) else name.parts
+            target = base.joinpath(*relative).resolve()
+            if base not in target.parents and not (member.is_dir() and target == base):
                 raise ValueError("backup contains a path outside destination")
             if member.is_dir():
                 continue

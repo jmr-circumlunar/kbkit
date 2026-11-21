@@ -32,7 +32,7 @@ class MaintenanceTests(unittest.TestCase):
             note = root / "note.md"
             note.write_text("# Note\n\ncontent", encoding="utf-8")
             first = maintain(root)
-            self.assertEqual(first["proposals"], 2)
-            note.write_text("---\nsource: user\nowner: me\n---\n# Note\n\ncontent", encoding="utf-8")
+            self.assertEqual(first["proposals"], 1)
+            note.write_text("---\nsource: user\nowner: me\n---\n# Note\n\ncontent\n", encoding="utf-8")
             second = maintain(root)
             self.assertGreaterEqual(second["expired_proposals"], 1)

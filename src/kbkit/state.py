@@ -8,10 +8,17 @@ import uuid
 import hashlib
 from pathlib import Path
 
+from .storage import metadata_dir
+
+
+def _executable(payload: dict) -> bool:
+    return (isinstance(payload, dict) and payload.get("operation") in ("append", "set_prop")
+            and isinstance(payload.get("path"), str) and isinstance(payload.get("expected_hash"), str))
+
 
 class StateStore:
     def __init__(self, root: Path) -> None:
-        self.path = root / ".kbkit" / "state.sqlite"
+        self.path = metadata_dir(root) / "state.sqlite"
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.connection = sqlite3.connect(self.path)
         self.connection.executescript(
@@ -30,7 +37,19 @@ class StateStore:
             );
             """
         )
-        self.connection.commit()
+        with self.connection:
+            self.connection.execute("BEGIN IMMEDIATE")
+            columns = {row[1] for row in self.connection.execute("PRAGMA table_info(proposals)")}
+            if "executable" not in columns:
+                self.connection.execute("ALTER TABLE proposals ADD COLUMN executable INTEGER NOT NULL DEFAULT 0")
+                rows = self.connection.execute("SELECT proposal_id, payload FROM proposals").fetchall()
+                for proposal_id, raw in rows:
+                    try:
+                        executable = _executable(json.loads(raw))
+                    except ValueError:
+                        continue
+                    if executable:
+                        self.connection.execute("UPDATE proposals SET executable = 1 WHERE proposal_id = ?", (proposal_id,))
 
     def record_event(self, source_kind: str, source_ref: str, before_hash: str | None, after_hash: str | None, cursor: str | None, commit: bool = True) -> str:
         event_id = str(uuid.uuid4())
@@ -66,8 +85,8 @@ class StateStore:
         proposal_id = str(uuid.uuid4())
         encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         self.connection.execute(
-            "INSERT INTO proposals VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (proposal_id, risk_level, reason, diff_ref, None, None, "pending", encoded),
+            "INSERT INTO proposals VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (proposal_id, risk_level, reason, diff_ref, None, None, "pending", encoded, int(_executable(payload))),
         )
         self.connection.commit()
         return proposal_id
@@ -82,6 +101,22 @@ class StateStore:
         if status is None:
             return list(self.connection.execute("SELECT proposal_id, risk_level, reason, status, payload FROM proposals ORDER BY rowid"))
         return list(self.connection.execute("SELECT proposal_id, risk_level, reason, status, payload FROM proposals WHERE status = ? ORDER BY rowid", (status,)))
+
+    def proposal_page(self, status: str | None, limit: int, offset: int) -> tuple[int, list[dict]]:
+        predicate = " WHERE executable = 1"
+        bindings = ()
+        if status is not None:
+            if status not in {"pending", "approved", "rejected", "applied", "expired", "conflicted"}:
+                raise ValueError("invalid proposal status")
+            predicate += " AND status = ?"
+            bindings = (status,)
+        total = self.connection.execute("SELECT count(*) FROM proposals" + predicate, bindings).fetchone()[0]
+        rows = self.connection.execute(
+            "SELECT proposal_id, risk_level, reason, status, payload FROM proposals" + predicate +
+            " ORDER BY rowid LIMIT ? OFFSET ?", (*bindings, limit, offset),
+        )
+        return total, [{"proposal_id": pid, "risk_level": risk, "reason": reason,
+                        "status": status, "payload": json.loads(payload)} for pid, risk, reason, status, payload in rows]
 
     def get_proposal(self, proposal_id: str) -> tuple | None:
         return self.connection.execute("SELECT proposal_id, risk_level, reason, status, payload FROM proposals WHERE proposal_id = ?", (proposal_id,)).fetchone()
@@ -100,32 +135,28 @@ class StateStore:
                 continue
         return False
 
-    def expire_missing_findings(self, active_findings: list[dict]) -> int:
-        """Expire pending lint proposals whose finding is no longer present."""
+    def expire_missing_findings(self, active_fixes: list[dict]) -> int:
+        """Retire old diagnostic rows and fixes whose source has changed."""
         active = {
             json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-            for item in active_findings
+            for item in active_fixes
         }
         rows = self.connection.execute(
-            "SELECT proposal_id, payload FROM proposals WHERE status = 'pending'"
+            "SELECT proposal_id, payload FROM proposals WHERE status IN ('pending', 'approved')"
         ).fetchall()
-        expired = 0
+        expired = []
         for proposal_id, stored in rows:
             try:
                 payload = json.loads(stored)
             except json.JSONDecodeError:
                 continue
-            if "rule" not in payload:
+            if not isinstance(payload, dict) or (self.path.parent / "transactions" / f"{proposal_id}.json").exists():
                 continue
-            fingerprint = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-            if fingerprint not in active:
-                self.connection.execute(
-                    "UPDATE proposals SET status = 'expired' WHERE proposal_id = ?",
-                    (proposal_id,),
-                )
-                expired += 1
+            if ("rule" in payload and not _executable(payload)) or (payload.get("finding_rule") and stored not in active):
+                expired.append((proposal_id,))
+        self.connection.executemany("UPDATE proposals SET status = 'expired' WHERE proposal_id = ?", expired)
         self.connection.commit()
-        return expired
+        return len(expired)
 
     def record_session_artifact(self, session_ref: str, content: str, retention: str, consent: bool) -> str:
         if not consent:

@@ -23,6 +23,10 @@ jobs:
         run: python -m pip install --no-deps -e .
       - name: Run tests
         run: python -m unittest discover -s tests -v
+      - name: Verify documentation contracts
+        run: python tools/check_docs_claims.py
+      - name: Evaluate retrieval
+        run: python tools/eval_retrieval.py
       - name: Runtime doctor
         run: python -m kbkit doctor
       - name: Build zipapp

@@ -7,17 +7,16 @@ from collections import defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .storage import metadata_dir
+from .profile import INACTIVE_STATES, Profile, load_profile
 from .prototype_markdown import parse_document
 from .transaction import digest, write_atomic
-
-
-INACTIVE_STATES = {"draft", "archived", "deprecated", "stale", "unverified", "conflicted", "unreviewed", "missing"}
 
 
 class KnowledgeVault:
     def __init__(self, root: Path) -> None:
         self.root = root.resolve()
-        self.manifest = self.root / ".kbkit" / "knowledge.json"
+        self.manifest = metadata_dir(self.root) / "knowledge.json"
         self.data = json.loads(self.manifest.read_text(encoding="utf-8")) if self.manifest.exists() else {
             "version": 1, "pages": {}, "code": {},
         }
@@ -42,7 +41,8 @@ class KnowledgeVault:
         except FileNotFoundError:
             return None
 
-    def statuses(self) -> dict[str, dict]:
+    def statuses(self, profile: Profile | None = None) -> dict[str, dict]:
+        profile = profile or load_profile(self.root)
         pages = self.data["pages"]
         code = {entry["page"]: entry for entry in self.data["code"].values()}
         dependents: dict[str, list[str]] = defaultdict(list)
@@ -57,7 +57,8 @@ class KnowledgeVault:
                 statuses[path] = {"state": "missing", "reason": "page_missing"}
                 continue
             state = parse_document(raw).fields.get("state", "active")
-            statuses[path] = {"state": state, "reason": "frontmatter"} if state in INACTIVE_STATES else {"state": "active"}
+            canonical = profile.canonical_state(state)
+            statuses[path] = {"state": canonical, "source_state": state, "reason": "frontmatter"} if canonical in profile.inactive else {"state": "active"}
         for path, page in pages.items():
             if statuses[path]["state"] == "active" and hashes[path] != page["hash"]:
                 statuses[path] = {"state": "unreviewed", "reason": "page_changed"}
@@ -69,7 +70,7 @@ class KnowledgeVault:
                 issue = entry.get("issue")
                 statuses[path] = {"state": "unverified" if issue == "source_unavailable" else "conflicted",
                                   "reason": issue or "generated_page_changed"}
-        queue = deque(path for path, status in statuses.items() if status["state"] in INACTIVE_STATES)
+        queue = deque(path for path, status in statuses.items() if status["state"] in profile.inactive)
         while queue:
             dependency = queue.popleft()
             for path in dependents[dependency]:
@@ -94,11 +95,12 @@ class KnowledgeVault:
             if candidate not in visited:
                 visited.add(candidate)
                 pending.extend(pages.get(candidate, {}).get("dependencies", {}))
-        statuses = self.statuses()
+        profile = load_profile(self.root)
+        statuses = self.statuses(profile)
         baselines = {}
         for dependency in edges:
             raw = self._bytes(dependency)
-            if raw is None or statuses.get(dependency, {}).get("state") in INACTIVE_STATES or parse_document(raw).fields.get("state") in INACTIVE_STATES:
+            if raw is None or statuses.get(dependency, {}).get("state") in profile.inactive or profile.canonical_state(parse_document(raw).fields.get("state", "active")) in profile.inactive:
                 raise ValueError(f"review a current dependency first: {dependency}")
             baselines[dependency] = digest(raw)
         raw = self._bytes(path)

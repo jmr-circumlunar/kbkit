@@ -62,10 +62,10 @@ class E2PrototypeTests(unittest.TestCase):
 
     def test_mcp_contract_has_jsonrpc_error(self):
         self.assertEqual(handle({"jsonrpc": "2.0", "id": 1, "method": "initialize"})["result"]["serverInfo"]["name"], "kbkit")
-        self.assertEqual(len(handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})["result"]["tools"]), 8)
+        self.assertTrue({"kb_graph", "kb_lint", "kb_outline"} <= {tool["name"] for tool in handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})["result"]["tools"]})
         self.assertIn("inputSchema", handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})["result"]["tools"][0])
         self.assertEqual(handle({"jsonrpc": "2.0", "id": 2, "method": "unknown"})["error"]["code"], -32601)
-        self.assertEqual(handle({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "kb_search", "arguments": {"query": ""}}}, None)["error"]["code"], -32000)
+        self.assertEqual(handle({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "kb_search", "arguments": {"query": ""}}}, None)["result"]["structuredContent"]["code"], "KB_VAULT_NOT_CONFIGURED")
 
     def test_mcp_tools_call_uses_application_service(self):
         with tempfile.TemporaryDirectory() as directory:

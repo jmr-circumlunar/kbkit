@@ -9,7 +9,11 @@ SQLite：3.51.0
 
 当前为 **有条件未通过**。核心离线能力、数据搬运、Markdown 兼容、事务协议、Git 可选能力和本地分发已有证据。Agent 宿主互操作、完整 MCP 客户端验证、断电级耐久性和发布 artifact 仍待完成。
 
-2026-11-18，公开测试分支 `test/release-compact-index` 的 `7f768b89452b31c5b51fafefc5736baa88fc144b` 通过 Windows Python 3.11、3.12、3.13 的新克隆验收。默认分支仍为 `6997e5b6d7e0b04e80f9eccb8e3091b77458ab9c`，仅提供 `doctor`。首次公开默认分支验收见 [功能模拟验证报告](FUNCTIONAL_SIMULATION_REPORT.md)。
+2026-11-18，公开测试分支 `test/release-compact-index` 的 `7f768b89452b31c5b51fafefc5736baa88fc144b` 通过 Windows Python 3.11、3.12、3.13 的新克隆验收。默认分支仍为 `6997e5b6d7e0b04e80f9eccb8e3091b77458ab9c`，当时仅提供 `doctor`。首次公开默认分支验收见 [功能模拟验证报告](FUNCTIONAL_SIMULATION_REPORT.md)。
+
+## 评估报告修复验证
+
+本地 932 篇合成库验证了 1,063 个候选块的分页、长文定位和维护报告有界输出。独立 Agent 走查覆盖了 Windows 安装、MCP 发现和写入恢复。已有知识库的精确基线由评估方提供的真实输入决定，合成库结果单独统计。
 
 ## I1–I7
 

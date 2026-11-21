@@ -7,11 +7,12 @@ import sqlite3
 from contextlib import closing
 from pathlib import Path
 
+from .storage import metadata_dir
 from .vault_profile import index_path
 
 
 def check_consistency(root: Path) -> dict:
-    profile = root / ".kbkit" / "profile.toml"
+    profile = metadata_dir(root) / "profile.toml"
     if not profile.exists():
         return {"ok": False, "errors": ["vault is not initialized"]}
     database = index_path(root)

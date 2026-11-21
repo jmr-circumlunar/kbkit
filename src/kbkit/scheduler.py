@@ -6,6 +6,8 @@ import json
 import uuid
 from pathlib import Path
 
+from .storage import metadata_dir
+
 
 def configure(
     root: Path,
@@ -24,7 +26,7 @@ def configure(
         raise ValueError("generated_content must be 'disabled' or 'enabled'")
     if not generated_root.strip() or Path(generated_root).is_absolute() or ".." in Path(generated_root).parts:
         raise ValueError("generated_root must be a relative vault path")
-    config = root / ".kbkit" / "automation.json"
+    config = metadata_dir(root) / "automation.json"
     record = {
         "task_id": str(uuid.uuid4()),
         "host": host,
@@ -41,5 +43,5 @@ def configure(
 
 
 def load(root: Path) -> dict | None:
-    config = root / ".kbkit" / "automation.json"
+    config = metadata_dir(root) / "automation.json"
     return json.loads(config.read_text(encoding="utf-8")) if config.exists() else None

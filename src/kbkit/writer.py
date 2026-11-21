@@ -1,49 +1,47 @@
-"""E3 safe proposal application for low-risk append operations."""
+"""Apply approved, hash-guarded maintenance proposals."""
 
 from __future__ import annotations
 
-import hashlib
+import json
+from contextlib import closing
 from pathlib import Path
+from uuid import UUID
 
-from .prototype_transaction import apply_with_journal
+from .prototype_lock import file_lock
 from .state import StateStore
-
-
-def _hash(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
+from .storage import metadata_dir
+from .transaction import TransactionError, apply_plan, plan_operations, recover_transaction
 
 
 def apply_proposal(root: Path, proposal_id: str) -> dict:
-    state = StateStore(root)
-    proposal = state.get_proposal(proposal_id)
-    if proposal is None:
-        state.close()
-        raise ValueError("proposal not found")
-    _, risk_level, _, status, payload_json = proposal
-    if status != "approved":
-        state.close()
-        raise ValueError("proposal must be approved")
-    if risk_level != "low":
-        state.close()
-        raise ValueError("only low-risk proposals are supported")
-    import json
-
-    payload = json.loads(payload_json)
-    if payload.get("operation") != "append":
-        state.close()
-        raise ValueError("unsupported proposal operation")
-    target = (root / payload["path"]).resolve()
-    if root.resolve() not in target.parents or target.suffix.lower() != ".md":
-        state.close()
-        raise ValueError("proposal path is outside the vault")
-    current = target.read_bytes()
-    if _hash(current) != payload["expected_hash"]:
-        state.set_proposal_status(proposal_id, "conflicted")
-        state.close()
-        raise ValueError("proposal expected_hash does not match")
-    journal = root / ".kbkit" / "transactions" / f"{proposal_id}.json"
-    journal.parent.mkdir(parents=True, exist_ok=True)
-    apply_with_journal(target, current + payload["content"].encode("utf-8"), journal)
-    state.set_proposal_status(proposal_id, "applied")
-    state.close()
-    return {"proposal_id": proposal_id, "status": "applied", "path": payload["path"]}
+    proposal_id = str(UUID(proposal_id))
+    root = root.resolve()
+    with closing(StateStore(root)) as state, file_lock(metadata_dir(root) / "maintenance.lock"):
+        proposal = state.get_proposal(proposal_id)
+        if proposal is None:
+            raise ValueError("proposal not found")
+        _, risk, _, status, payload_json = proposal
+        payload = json.loads(payload_json)
+        if status == "applied":
+            return {"proposal_id": proposal_id, "status": status, "path": payload["path"]}
+        if status != "approved" or risk != "low":
+            raise ValueError("approve a low-risk proposal before applying it")
+        if payload.get("operation") not in {"append", "set_prop"} or not payload.get("expected_hash"):
+            raise ValueError("this legacy finding has no executable fix; inspect it with kb_lint")
+        journal = metadata_dir(root) / "transactions" / f"{proposal_id}.json"
+        if journal.exists():
+            outcome = recover_transaction(root, journal)
+        else:
+            try:
+                operation = {key: value for key, value in payload.items() if key != "finding_rule"}
+                plan = plan_operations(root, [operation], dry_run=False)
+                plan["transaction_id"] = proposal_id
+                outcome = apply_plan(root, plan)["state"]
+            except (TransactionError, FileNotFoundError):
+                state.set_proposal_status(proposal_id, "conflicted")
+                raise
+        if outcome != "applied":
+            state.set_proposal_status(proposal_id, "conflicted")
+            raise TransactionError("proposal conflicted; inspect the transaction journal")
+        state.set_proposal_status(proposal_id, "applied")
+        return {"proposal_id": proposal_id, "status": "applied", "path": payload["path"]}

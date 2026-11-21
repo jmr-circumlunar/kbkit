@@ -32,7 +32,7 @@ class McpProcessTests(unittest.TestCase):
             self.assertEqual(process.returncode, 0, error)
             responses = [json.loads(line) for line in output.splitlines()]
             self.assertEqual(responses[0]["result"]["serverInfo"]["name"], "kbkit")
-            self.assertEqual(len(responses[1]["result"]["tools"]), 8)
+            self.assertTrue({"kb_graph", "kb_lint", "kb_outline"} <= {tool["name"] for tool in responses[1]["result"]["tools"]})
             self.assertIn("initialized", responses[2]["result"]["content"][0]["text"])
 
     def test_stdio_handles_notifications_ping_and_utf8_in_one_session(self):

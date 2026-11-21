@@ -77,10 +77,14 @@ class TransactionTests(unittest.TestCase):
             self.assertEqual(len(plan["changes"]), 2)
             applied = apply_plan(root, plan)
             self.assertEqual(applied["state"], "applied")
-            self.assertEqual((root / "source.md").read_bytes(), b"")
+            self.assertFalse((root / "source.md").exists())
+            self.assertEqual((root / "target.md").read_bytes(), b"content")
             delete_plan = plan_operations(root, [{"operation": "delete", "path": "target.md"}])
-            apply_plan(root, delete_plan)
-            self.assertEqual((root / "target.md").read_bytes(), b"")
+            result = apply_plan(root, delete_plan)
+            self.assertFalse((root / "target.md").exists())
+            restored = restore_from_trash(root, result["trash"][0]["entry_id"])
+            self.assertEqual(restored["status"], "restored")
+            self.assertEqual((root / "target.md").read_bytes(), b"content")
 
     def test_selector_rejects_ambiguous_locator(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -89,7 +93,7 @@ class TransactionTests(unittest.TestCase):
             path.write_text("note", encoding="utf-8")
             with self.assertRaises(SelectorError):
                 resolve_selector(root, {"path": "note.md", "block_id": "note.md:0"})
-            self.assertEqual(resolve_selector(root, {"block_id": "note.md:0"}), path.resolve())
+            self.assertEqual(resolve_selector(root, {"block_id": "note.md:0"})[0], path.resolve())
 
     def test_delete_uses_trash_and_can_restore(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -109,7 +113,7 @@ class TransactionTests(unittest.TestCase):
             target.write_bytes(b"note")
             plan = plan_operations(root, [{"operation": "append", "selector": {"block_id": "note.md:0"}, "content": "!"}])
             apply_plan(root, plan)
-            self.assertEqual(target.read_bytes(), b"note!")
+            self.assertEqual(target.read_bytes(), b"note\n!")
 
     def test_fault_injection_leaves_pending_journal_for_recovery(self):
         with tempfile.TemporaryDirectory() as directory:

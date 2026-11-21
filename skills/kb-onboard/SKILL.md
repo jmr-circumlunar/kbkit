@@ -1,18 +1,13 @@
 ---
 name: kb-onboard
-description: Initialize and inspect a local kbkit Markdown knowledge base.
+description: Initialize and verify a local kbkit Markdown knowledge base.
 metadata:
   kbkit-api-version: v1
 ---
 
 # kbkit onboarding
 
-Use the local kbkit checkout or virtual environment configured by the user.
-
-1. Run `python -m kbkit doctor`.
-2. Discover or initialize the vault only after showing the proposed path and layout.
-3. Never overwrite an existing vault during initialization.
-4. Report the vault identity, profile state, index state, and excluded paths.
-5. Ask for explicit confirmation before creating directories or changing profile data.
-
-Use MCP for structured operations when it is configured. Use CLI for diagnostics and setup.
+1. Run `python -m kbkit doctor`. Confirm the existing vault path or the destination for a new vault with the user.
+2. Run `python -m kbkit init <vault>` to initialize the selected vault. If the user wants metadata outside the vault, set `KBKIT_HOME` before initializing and use the same value in the Agent host.
+3. Run `python -m kbkit doctor --vault <vault>` and `python -m kbkit index <vault>`. For structured operations, configure the same Python with `python -m kbkit mcp stdio` and pass `KBKIT_VAULT` to that process.
+4. Check `kb_status` or `kbc status <vault>` for `initialized`, `profile`, `indexed_blocks` and `excluded_paths`. Confirm any initial schedule once and use the host scheduler.

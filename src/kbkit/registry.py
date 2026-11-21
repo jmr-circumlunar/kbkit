@@ -6,6 +6,8 @@ import os
 import sqlite3
 from pathlib import Path
 
+from .storage import metadata_dir
+
 from .vault_profile import assign_copy_id, vault_id
 
 
@@ -30,7 +32,7 @@ class VaultRegistry:
             different_location = previous is not None and Path(previous[0]) != root
             if different_location and identity is None:
                 raise ValueError("vault UUID already registered at a different path; choose --identity moved or --identity copy")
-            if identity == "moved" and different_location and (Path(previous[0]) / ".kbkit" / "profile.toml").is_file():
+            if identity == "moved" and different_location and (metadata_dir(Path(previous[0])) / "profile.toml").is_file():
                 raise ValueError("the original vault still exists; register this as a copy")
             if identity == "copy" and (different_location or previous is None):
                 registered = self.connection.execute("SELECT 1 FROM vaults WHERE path = ?", (str(root),)).fetchone()

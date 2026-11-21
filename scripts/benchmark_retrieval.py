@@ -50,10 +50,11 @@ def measure(app: ApplicationService, query: str, expected: int, samples: int) ->
     elapsed: list[float] = []
     for iteration in range(samples + 1):
         start = time.perf_counter()
-        hits = app.search(query)["hits"]
+        result = app.search(query)
+        hits = result["total_candidates"]
         duration = (time.perf_counter() - start) * 1000
-        if len(hits) != expected:
-            raise ValueError(f"{query}: expected {expected} results, got {len(hits)}")
+        if hits != expected:
+            raise ValueError(f"{query}: expected {expected} results, got {hits}")
         if iteration:
             elapsed.append(duration)
     elapsed.sort()
