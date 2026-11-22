@@ -355,7 +355,7 @@ def _trash(root: Path, data: bytes, change: dict) -> None:
 def recover_transaction(root: Path, journal: Path, *, accept_current: bool = False) -> str:
     root = root.resolve()
     with file_lock(_lock_path(root)):
-        if not journal.is_file() and journal.parent == metadata_dir(root) / "transactions":
+        if not journal.is_file() and journal.parent.resolve() == (metadata_dir(root) / "transactions").resolve():
             journal = _receipt_path(journal)
         record = _read_journal(journal)
         if accept_current:

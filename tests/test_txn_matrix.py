@@ -62,7 +62,8 @@ class TransactionMatrixTests(unittest.TestCase):
         plan = plan_operations(self.root, [{"operation": "append", "path": "a.md", "content": "1"}, {"operation": "append", "path": "b.md", "content": "2"}])
         with self.assertRaises(RuntimeError):
             apply_plan(self.root, plan, fail_after=1)
-        journal = metadata_dir(self.root) / "transactions" / f"{plan['transaction_id']}.json"
+        directory = metadata_dir(self.root) / "transactions"
+        journal = directory / ".." / "transactions" / f"{plan['transaction_id']}.json"
         self.assertEqual(recover_transaction(self.root, journal), "applied")
         self.assertEqual(recover_transaction(self.root, journal), "applied")
         self.assertEqual((self.root / "a.md").read_bytes(), b"a1")
