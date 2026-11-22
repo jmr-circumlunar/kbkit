@@ -39,7 +39,7 @@ def _search_tokens(content: str) -> tuple[str, str]:
 
 def _match_expression(query: str) -> str:
     if not _HAN_RUN.search(query):
-        return "{path block_id title content}: (" + query + ")"
+        return "{path title content}: (" + query + ")"
     terms = []
     for position, part in enumerate(_HAN_RUN.split(query)):
         if position % 2:
@@ -57,7 +57,7 @@ class FtsIndex:
             "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name IN ('blocks', 'block_text')"
         ))
         existing = schema.get("blocks", "")
-        self.rebuild_required = "content=''" not in existing or "han_title_bigrams" not in existing or "heading_path" not in schema.get("block_text", "")
+        self.rebuild_required = "block_id UNINDEXED" not in existing or "content=''" not in existing or "han_title_bigrams" not in existing or "heading_path" not in schema.get("block_text", "")
         if self.rebuild_required:
             self.connection.execute("DROP TABLE IF EXISTS blocks")
             self.connection.execute("DROP TABLE IF EXISTS block_text")
@@ -69,7 +69,7 @@ class FtsIndex:
         self.connection.execute("CREATE INDEX IF NOT EXISTS block_text_path ON block_text(path, block_id)")
         self.connection.execute(
             """CREATE VIRTUAL TABLE IF NOT EXISTS blocks USING fts5(
-                path, block_id, content, han_bigrams, title, han_title_bigrams,
+                path, block_id UNINDEXED, content, han_bigrams, title, han_title_bigrams,
                 content='', tokenize = 'unicode61 tokenchars ''_'''
             )"""
         )

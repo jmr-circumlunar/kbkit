@@ -48,7 +48,8 @@ def build_graph(root: Path) -> dict:
     incoming = dict.fromkeys(sorted(paths), 0)
     for source, (path, _) in sorted(paths.items()):
         for target in _targets(path.read_text(encoding="utf-8-sig")):
-            name = unicodedata.normalize("NFC", target)
+            # Obsidian table aliases use an escaped pipe, e.g. [[note\|label]].
+            name = unicodedata.normalize("NFC", target.rstrip("\\").replace("\\", "/"))
             relative = name if name in files else name + ".md"
             matches = by_name.get(name.removesuffix(".md"), [])
             resolved = files.get(relative)

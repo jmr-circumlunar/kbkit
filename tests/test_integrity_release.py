@@ -21,7 +21,7 @@ from kbkit.knowledge import KnowledgeVault
 from kbkit.scheduler import configure, load
 from kbkit.storage import metadata_dir
 from kbkit.transaction import apply_plan, plan_operations
-from kbkit.vault_profile import index_path
+from kbkit.vault_profile import index_path, vault_id
 
 
 class IntegrityRegressionTests(unittest.TestCase):
@@ -71,6 +71,12 @@ class IntegrityRegressionTests(unittest.TestCase):
         self.assertFalse((destination / ".git").exists())
         self.assertIn("Source", KnowledgeVault(destination).history("案内/État.md", 1)["content"])
         self.assertTrue(load(destination)["enabled"])
+        self.assertEqual(vault_id(destination), self.identity)
+        self.vault.rename(self.base / "old-copy")
+        moved = self.run_cli("add", destination, "--identity", "moved")
+        self.assertEqual(moved.returncode, 0, moved.stderr)
+        self.assertIn(self.identity, moved.stdout.decode("utf-8"))
+
         ApplicationService(destination).index()
         self.assertEqual(len(ApplicationService(destination).search("Source")["hits"]), 1)
 
@@ -121,7 +127,7 @@ class IntegrityRegressionTests(unittest.TestCase):
         self.assertEqual((moved / "a.md").read_bytes(), b"unchanged\napplied\n")
 
     def test_corrupt_index_is_quarantined_and_graph_handles_attachments(self):
-        self.note("note.md", b"# Source\n\n![[picture.png]]\n\n\x60\x60\x60\n[[example-only]]\n\x60\x60\x60\n")
+        self.note("note.md", b"# Source\n\n![[picture.png]] | [[note\\|Source]]\n\n\x60\x60\x60\n[[example-only]]\n\x60\x60\x60\n")
         self.note("assets/picture.png", b"image")
         self.service.index()
         self.assertEqual(build_graph(self.vault)["broken"], [])
