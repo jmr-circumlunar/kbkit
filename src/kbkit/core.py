@@ -11,7 +11,7 @@ from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 
-from .storage import markdown_files, metadata_dir
+from .storage import change_tokens, markdown_files, metadata_dir
 
 from .prototype_index import FtsIndex
 from .state import StateStore
@@ -55,7 +55,7 @@ def init_vault(root: Path) -> Path:
 
 def _blocks(relative: str, data: bytes) -> list[Block]:
     lines = source_lines(data)
-    sections = headings(data)
+    sections = headings(data, lines=lines)
     names = {heading.start: heading.path for heading in sections}
     return [
         Block(relative, f"{relative}:{ordinal}", names.get(section.start, ()),
@@ -73,8 +73,8 @@ def _document_metadata(data: bytes) -> dict:
     return metadata
 
 
-def _sync_index(root: Path, connection: sqlite3.Connection, state: StateStore) -> int:
-    connection.execute("CREATE TABLE IF NOT EXISTS documents(path TEXT PRIMARY KEY, content_hash TEXT NOT NULL, document_id TEXT, mtime_ns INTEGER, size INTEGER, lifecycle TEXT, metadata TEXT)")
+def _sync_index(root: Path, connection: sqlite3.Connection, state: StateStore, *, verify: bool) -> int:
+    connection.execute("CREATE TABLE IF NOT EXISTS documents(path TEXT PRIMARY KEY, content_hash TEXT NOT NULL, document_id TEXT, mtime_ns INTEGER, size INTEGER, lifecycle TEXT, metadata TEXT, change_token TEXT)")
     columns = {row[1] for row in connection.execute("PRAGMA table_info(documents)")}
     if "document_id" not in columns:
         connection.execute("ALTER TABLE documents ADD COLUMN document_id TEXT")
@@ -86,15 +86,18 @@ def _sync_index(root: Path, connection: sqlite3.Connection, state: StateStore) -
         connection.execute("ALTER TABLE documents ADD COLUMN lifecycle TEXT")
     if "metadata" not in columns:
         connection.execute("ALTER TABLE documents ADD COLUMN metadata TEXT")
+    if "change_token" not in columns:
+        connection.execute("ALTER TABLE documents ADD COLUMN change_token TEXT")
     index = FtsIndex(connection)
     count = 0
     documents = {
-        path: (content_hash, document_id, mtime_ns, size, lifecycle, fields_json)
-        for path, content_hash, document_id, mtime_ns, size, lifecycle, fields_json in connection.execute(
-            "SELECT path, content_hash, document_id, mtime_ns, size, lifecycle, metadata FROM documents"
+        path: (content_hash, document_id, mtime_ns, size, lifecycle, fields_json, token)
+        for path, content_hash, document_id, mtime_ns, size, lifecycle, fields_json, token in connection.execute(
+            "SELECT path, content_hash, document_id, mtime_ns, size, lifecycle, metadata, change_token FROM documents"
         )
     }
     paths = markdown_files(root)
+    tokens = change_tokens(paths)
     missing = documents.keys() - paths.keys()
     missing_by_hash: dict[str, list[str]] = defaultdict(list)
     for relative in sorted(missing):
@@ -103,13 +106,17 @@ def _sync_index(root: Path, connection: sqlite3.Connection, state: StateStore) -
     for relative, (path, info) in sorted(paths.items()):
         previous = documents.get(relative)
         metadata = (info.st_mtime_ns, info.st_size)
+        token = tokens.get(relative)
+        if (not verify and not index.rebuild_required and token and previous and previous[5] is not None
+                and previous[2:4] == metadata and previous[6] == token):
+            continue
         data = path.read_bytes()
         content_hash = _hash(data)
         if previous and previous[0] == content_hash:
-            if previous[2:4] != metadata or previous[5] is None:
+            if previous[2:4] != metadata or previous[5] is None or previous[6] != token:
                 fields = _document_metadata(data)
-                connection.execute("UPDATE documents SET mtime_ns = ?, size = ?, lifecycle = ?, metadata = ? WHERE path = ?",
-                                   (*metadata, fields.get("state", "active"), json.dumps(fields), relative))
+                connection.execute("UPDATE documents SET mtime_ns = ?, size = ?, lifecycle = ?, metadata = ?, change_token = ? WHERE path = ?",
+                                   (*metadata, fields.get("state", "active"), json.dumps(fields), token, relative))
             if index.rebuild_required:
                 for block in _blocks(relative, data):
                     index.insert_block(block.path, block.block_id, block.content, commit=False,
@@ -127,10 +134,10 @@ def _sync_index(root: Path, connection: sqlite3.Connection, state: StateStore) -
                 state.record_event("vault", old_path, content_hash, None, "moved", commit=False)
         state.record_event("vault", relative, previous[0] if previous else None, content_hash, "moved" if previous is None and document_id else content_hash, commit=False)
         fields = _document_metadata(data)
-        connection.execute("INSERT OR REPLACE INTO documents(path, content_hash, document_id, mtime_ns, size, lifecycle, metadata)"
-                           " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        connection.execute("INSERT OR REPLACE INTO documents(path, content_hash, document_id, mtime_ns, size, lifecycle, metadata, change_token)"
+                           " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                            (relative, content_hash, document_id or str(uuid.uuid4()), *metadata,
-                            fields.get("state", "active"), json.dumps(fields)))
+                            fields.get("state", "active"), json.dumps(fields), token))
         if previous:
             index.delete_blocks(relative)
         for block in _blocks(relative, data):
@@ -146,11 +153,35 @@ def _sync_index(root: Path, connection: sqlite3.Connection, state: StateStore) -
     return count
 
 
-def _build_index(root: Path) -> int:
-    with closing(sqlite3.connect(index_path(root, create=True))) as connection, closing(StateStore(root)) as state:
-        with state.connection, connection:
-            connection.execute("BEGIN IMMEDIATE")
-            return _sync_index(root, connection, state)
+def _index_is_damaged(path: Path) -> bool:
+    try:
+        with closing(sqlite3.connect(path)) as connection:
+            return any(row != ("ok",) for row in connection.execute("PRAGMA quick_check"))
+    except sqlite3.DatabaseError as error:
+        return getattr(error, "sqlite_errorcode", 0) & 255 in (sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB)
+
+
+def _build_index(root: Path, *, verify: bool = True) -> int:
+    path = index_path(root, create=True)
+    for attempt in range(2):
+        try:
+            with closing(sqlite3.connect(path)) as connection:
+                connection.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
+                with closing(StateStore(root)) as state, state.connection, connection:
+                    connection.execute("BEGIN IMMEDIATE")
+                    return _sync_index(root, connection, state, verify=verify)
+        except sqlite3.DatabaseError as error:
+            if attempt or getattr(error, "sqlite_errorcode", 0) & 255 not in (sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB):
+                raise
+            if not _index_is_damaged(path):
+                raise
+        suffix = f".damaged-{uuid.uuid4().hex[:8]}"
+        path.rename(path.with_suffix(suffix))
+        for extension in ("-wal", "-shm", "-journal"):
+            sidecar = path.with_name(path.name + extension)
+            if sidecar.is_file():
+                sidecar.rename(sidecar.with_suffix(suffix + extension))
+    raise RuntimeError("index recovery did not complete")
 
 
 def build_index(root: Path) -> int:

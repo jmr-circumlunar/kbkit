@@ -234,7 +234,7 @@ def _apply_plan(root: Path, plan: dict, fail_after: int | None) -> dict:
         if change.after is not None:
             staging = staging_dir / f"{index}.after"
             write_atomic(staging, change.after)
-            record.update(staging=str(staging), after_hash=digest(change.after))
+            record.update(staging=staging.relative_to(transaction_dir).as_posix(), after_hash=digest(change.after))
         else:
             record["after_hash"] = None
             record["quarantine"] = f".kbkit-{transaction_id}-{index}.removed"
@@ -333,7 +333,14 @@ def _recover(root: Path, journal: Path, record: dict, fail_after: int | None = N
                 _trash(root, data, change)
             quarantine.unlink()
         else:
-            after = Path(change["staging"]).read_bytes()
+            staging = Path(change["staging"])
+            if not staging.is_absolute():
+                staging = (journal.parent / staging).resolve()
+                if journal.parent.resolve() not in staging.parents:
+                    raise TransactionError("staging path is outside the transaction directory")
+            elif not staging.is_file():
+                staging = journal.parent / journal.stem / staging.name
+            after = staging.read_bytes()
             if digest(after) != after_hash:
                 raise TransactionError("staged image hash mismatch")
 

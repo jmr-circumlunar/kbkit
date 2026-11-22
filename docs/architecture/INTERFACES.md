@@ -26,6 +26,8 @@ stdio 使用 UTF-8。服务协商 `2025-11-25` 或 `2025-06-18`，工具结果�
 
 ### 检索与导航
 
+配置 `search.require_state = true` 会将没有状态的旧笔记标为 unknown。显式查默认排除区时，设置 `include_excluded` 并提供明确的 `path`。若还需要已归档或失效内容，同时设置 `include_inactive`。
+
 - `kb_search` 支持 `query`、`path`、`kind`、`state`、`tags`、`symbols`、`exclude` 和 `include_inactive`。`path` 和 `kind` 多值为 OR，`tags` 和 `symbols` 多值为 AND。前缀按目录边界匹配。显式选定某个非活跃状态时，该状态可参与检索。符号过滤区分大小写。非法枚举通过 `KB_QUERY_ENUM_INVALID` 返回有效选项。
 - 搜索默认 `limit=8`，最大 50。`max_chars` 默认 1200，`budget_chars` 可限制整页正文字符数。`select` 支持 `snippet`、`path`、`full`、`json`。`full` 从命中块开头取正文，仍受字符和字节预算限制。`total_candidates` 是应用过滤后、分页前的块数。
 - 搜索命中提供 `path`、`block_id`、`heading_path`、`lines`、`line_start`、`line_end`、`vault_id`、`state`、`stale`、`score`。正文模式提供 `content`、`content_truncated` 和 `hit_line`。行号从 1 开始，两端均包含。`score` 为反向 BM25，越大越靠前。
@@ -55,6 +57,7 @@ stdio 使用 UTF-8。服务协商 `2025-11-25` 或 `2025-06-18`，工具结果�
 kinds = ["现状", "方案", "决策"]
 title_weight = 1.5
 body_weight = 1.0
+require_state = true
 
 [search.exclude]
 prefixes = ["01-工作台/暂缓", "日记"]
@@ -69,6 +72,7 @@ inactive = ["暂停复核"]
 [lint]
 disable = []
 provenance_fields = ["source", "review_by", "evidence"]
+provenance_kinds = ["现状"]
 allowed_fields = ["product", "project"]
 ```
 
@@ -83,3 +87,9 @@ allowed_fields = ["product", "project"]
 <!-- kbkit-contract output kb_write_apply positions trash entry_id index_dirty -->
 <!-- kbkit-contract state kb_write_apply applied pending divergent -->
 <!-- kbkit-contract error code message severity hint retryable details -->
+
+## 备份、搬迁与恢复
+
+用 `kbc backup create <vault> <archive>`、`kbc backup verify <archive>` 和 `kbc backup restore <archive> <destination>`。恢复先暂存整包，目标须为新目录或空目录。ZIP 包含笔记、附件、Obsidian 可移植配置和知识状态。插件及其配置、宿主凭据、工作区会话、Git 与未完成事务各自保存在原位置。备份前应完成或处理待恢复事务。
+
+使用外置 `KBKIT_HOME` 搬迁时，先移动原目录，再执行 `kbc add <new> --identity moved --from <old>`。保留同一注册目录和外置元数据根路径。索引按新位置重建。

@@ -9,7 +9,7 @@ import tomllib
 import uuid
 from pathlib import Path
 
-from .storage import metadata_dir
+from .storage import app_data_dir, metadata_dir
 
 from .transaction import write_atomic
 
@@ -38,7 +38,7 @@ def assign_copy_id(root: Path) -> str:
 
 def index_path(root: Path, *, create: bool = False) -> Path:
     configured = os.environ.get("KBKIT_INDEX_DIR")
-    base = Path(configured) if configured else Path(os.environ.get("LOCALAPPDATA", metadata_dir(root))) / "kbkit" / "indexes"
+    base = Path(configured).expanduser() if configured else app_data_dir("cache") / "indexes"
     location = os.path.normcase(str(root.resolve())).encode("utf-8")
     folder = base / vault_id(root)
     if create:

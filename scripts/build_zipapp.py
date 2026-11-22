@@ -23,6 +23,10 @@ def build(source: Path, output: Path) -> None:
             write("LICENSE", (source.parent / "LICENSE").read_bytes())
             for path in sorted((source / "kbkit").rglob("*.py"), key=lambda item: item.relative_to(source).as_posix()):
                 write(path.relative_to(source).as_posix(), path.read_bytes())
+            for source_dir, bundle in (("skills", "skills"), ("knowledge", "starter")):
+                directory = source.parent / source_dir
+                for path in sorted(directory.rglob("*.md")):
+                    write(f"share/kbkit/{bundle}/{path.relative_to(directory).as_posix()}", path.read_bytes())
     output.chmod(output.stat().st_mode | stat.S_IXUSR)
 
 

@@ -40,7 +40,8 @@ def lint(root: Path, *, graph: dict | None = None, protected=()) -> list[dict]:
             newline = "\r\n" if b"\r\n" in raw else "\n"
             findings.append({"rule": "FM-FINAL-NEWLINE", "severity": "low", "path": relative, "message": "missing final newline",
                              "fix": {"finding_rule": "FM-FINAL-NEWLINE", "operation": "append", "path": relative, "content": newline, "expected_hash": digest(raw)}})
-        if profile.provenance_fields and not any(document.fields.get(field) for field in profile.provenance_fields):
+        needs_provenance = not profile.provenance_kinds or document.fields.get("kind") in profile.provenance_kinds
+        if needs_provenance and profile.provenance_fields and not any(document.fields.get(field) for field in profile.provenance_fields):
             findings.append({"rule": "LINT-L04", "severity": "low", "path": relative, "message": "missing provenance fields"})
     if compatibility:
         counts = Counter()

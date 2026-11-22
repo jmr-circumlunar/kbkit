@@ -11,13 +11,16 @@ import sys
 import tempfile
 from contextlib import closing
 from pathlib import Path
+from zipfile import BadZipFile
 
 from . import __version__
 from .application import ApplicationService
+from .backup import create_backup, restore_backup, verify_backup
 from .code_sync import bind_code
 from .core import init_vault
 from .git_adapter import GitUnavailable
 from .knowledge import KnowledgeVault
+from .onboarding import session_context, setup
 from .prototype_lock import file_lock
 from .prototype_mcp import handle
 from .registry import VaultRegistry
@@ -37,8 +40,32 @@ def build_parser() -> argparse.ArgumentParser:
         command = commands.add_parser(name, help=f"{name.capitalize()} a Markdown vault.")
         command.add_argument("path", type=Path)
         command.add_argument("--identity", choices=["moved", "copy"])
+        if name == "add":
+            command.add_argument("--from", dest="moved_from", type=Path)
     commands.add_parser("use", help="Select a registered vault.").add_argument("vault_uuid")
     commands.add_parser("current", help="Show the active vault.")
+    setup_parser = commands.add_parser("setup", help="Prepare the starter vault or an existing vault and connect an Agent host.")
+    setup_parser.add_argument("vault", nargs="?", type=Path, default=Path("knowledge"))
+    setup_parser.add_argument("--project", type=Path, default=Path.cwd())
+    setup_parser.add_argument("--host", choices=["standalone", "codex", "claude"], default="standalone")
+    setup_parser.add_argument("--context-note")
+    context = commands.add_parser("context", help="Emit bounded SessionStart context as JSON.")
+    context.add_argument("vault", type=Path)
+    context.add_argument("--note")
+    write = commands.add_parser("write", help="Plan or apply operations from a JSON file, or from - for stdin.")
+    write.add_argument("action", choices=["plan", "apply"])
+    write.add_argument("vault", type=Path)
+    write.add_argument("operations")
+    write.add_argument("--plan-hash")
+    backup = commands.add_parser("backup", help="Archive, verify or restore a vault.")
+    backup_actions = backup.add_subparsers(dest="action", required=True)
+    for action in ("create", "verify", "restore"):
+        command = backup_actions.add_parser(action)
+        if action == "create":
+            command.add_argument("vault", type=Path)
+        command.add_argument("archive", type=Path)
+        if action == "restore":
+            command.add_argument("destination", type=Path)
 
     for name in ("index", "status", "search", "read", "outline", "graph", "lint", "task", "maintain", "proposal", "recover", "restore"):
         command = commands.add_parser(name, help=f"Run {name} for a vault.")
@@ -51,6 +78,7 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument("--max-bytes", type=int, default=640 if name == "outline" else 36_000)
         if name == "search":
             command.add_argument("query")
+            command.add_argument("--include-excluded", action="store_true")
             command.add_argument("--include-inactive", action="store_true")
             command.add_argument("--json", action="store_true")
             command.add_argument("--max-chars", type=int, default=1200)
@@ -184,13 +212,13 @@ def _vault_command(args) -> int:
     if name in {"init", "add"}:
         profile = init_vault(root) if name == "init" else None
         with closing(VaultRegistry()) as registry:
-            identity = registry.add(root, identity=args.identity)
+            identity = registry.add(root, identity=args.identity, moved_from=getattr(args, "moved_from", None))
         print(f"profile: {profile}\nvault_uuid: {identity}" if profile else identity)
         return 0
     window = {key: getattr(args, key) for key in ("limit", "offset", "max_bytes")} if hasattr(args, "limit") else {}
     if name == "search":
         filters = {key: getattr(args, "filter_" + key) for key in ("path", "kind", "state", "tags", "symbols", "exclude")}
-        result = service.search(args.query, args.include_inactive, max_chars=args.max_chars, **filters, **window)
+        result = service.search(args.query, args.include_inactive, max_chars=args.max_chars, include_excluded=args.include_excluded, **filters, **window)
         if args.json:
             _json(result)
         else:
@@ -222,7 +250,17 @@ def _vault_command(args) -> int:
         return int(result["status"] != "succeeded")
     elif name == "recover":
         journals = sorted((metadata_dir(root) / "transactions").glob("*.json"))
-        result = {journal.name: recover_transaction(root, journal) for journal in journals}
+        result = {}
+        ok = True
+        for journal in journals:
+            try:
+                outcome = recover_transaction(root, journal)
+            except (ValueError, OSError, KeyError, TypeError) as error:
+                outcome = {"state": "error", "message": str(error)}
+            result[journal.name] = outcome
+            ok = ok and outcome == "applied"
+        _json(result)
+        return int(not ok)
     elif name == "restore":
         result = service.restore(args.entry_id)
     else:
@@ -245,6 +283,27 @@ def main() -> int:
             parser.print_help()
         elif args.command == "doctor":
             return _doctor(args.vault)
+        elif args.command == "setup":
+            _json(setup(args.vault, args.project, args.host, args.context_note))
+        elif args.command == "context":
+            _json(session_context(args.vault, args.note))
+        elif args.command == "write":
+            source = sys.stdin.buffer.read() if args.operations == "-" else Path(args.operations).read_bytes()
+            operations = json.loads(source)
+            service = ApplicationService(args.vault)
+            result = (service.plan_operations(operations) if args.action == "plan"
+                      else service.apply_operations(operations, args.plan_hash))
+            _json(result)
+            return int(result.get("state") == "divergent")
+        elif args.command == "backup":
+            if args.action == "create":
+                _json(create_backup(args.vault, args.archive))
+            elif args.action == "verify":
+                result = verify_backup(args.archive)
+                _json(result)
+                return int(not result["ok"])
+            else:
+                _json(restore_backup(args.archive, args.destination))
         elif args.command == "knowledge":
             if not (metadata_dir(args.vault) / "profile.toml").is_file():
                 raise ValueError("vault is not initialized; run kbc init first")
@@ -256,7 +315,7 @@ def main() -> int:
                 print(value)
         else:
             return _vault_command(args)
-    except (ValueError, OSError, sqlite3.Error, GitUnavailable) as exc:
+    except (ValueError, OSError, BadZipFile, sqlite3.Error, GitUnavailable, TypeError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
     return 0

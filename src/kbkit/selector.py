@@ -46,18 +46,23 @@ def markdown_path(root: Path, relative: str, *, allow_missing: bool = False) -> 
 
 
 def source_lines(raw: bytes) -> list[bytes]:
-    return re.findall(rb"[^\r\n]*(?:\r\n|\n|\r)|[^\r\n]+$", raw)
+    return raw.splitlines(keepends=True)
 
 
-def headings(raw: bytes) -> list[Heading]:
+def headings(raw: bytes, *, lines: list[bytes] | None = None) -> list[Heading]:
     document = parse_document(raw)
     offset = len(source_lines(document.prefix)) if document.body_offset > 3 else 0
-    lines = source_lines(raw)
+    lines = source_lines(raw) if lines is None else lines
     found = []
     stack = []
     fence = None
     for index in range(offset, len(lines)):
-        line = lines[index].decode("utf-8-sig").rstrip("\r\n")
+        candidate = lines[index]
+        if index == 0 and candidate.startswith(bytes.fromhex("efbbbf")):
+            candidate = candidate[3:]
+        if candidate[:4].lstrip(b" ")[:1] not in (b"#", b"~", b"`", b"=", b"-"):
+            continue
+        line = candidate.decode("utf-8").rstrip("\r\n")
         marker = re.match(r"^ {0,3}([~\x60])\1{2,}", line)
         if fence:
             if marker and marker[1] == fence[0] and len(marker[0].lstrip()) >= fence[1] and not line[marker.end():].strip():

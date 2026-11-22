@@ -11,12 +11,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-15, macos-15-intel]
         python-version: ["3.11", "3.12", "3.13"]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install package
@@ -33,3 +33,6 @@ jobs:
         run: python scripts/build_zipapp.py kbkit.pyz
       - name: Verify zipapp
         run: python kbkit.pyz doctor
+      - name: Verify packaged workflow on macOS
+        if: runner.os == 'macOS' && matrix.python-version == '3.13'
+        run: python scripts/verify_release.py "${{ github.workspace }}" --expect-sha "${{ github.sha }}"

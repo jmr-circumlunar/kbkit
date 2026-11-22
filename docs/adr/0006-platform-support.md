@@ -11,7 +11,7 @@
 
 - Windows 作为第一开发和发布验收平台。
 - Linux 先做 CI 烟测，直到文件锁、事务恢复、路径和任务调度均有完整测试后再声明正式支持。
-- macOS 暂不承诺，待资源和需求明确后增加。
+- macOS 以本地 APFS 为适配目标，Apple Silicon 与 Intel 在 CI 分别运行验收。
 - 第一版优先支持本地 NTFS；网络共享盘、同步盘和云盘不作为事务保证范围。
 - 所有平台相关行为通过 adapter 隔离，不在领域层散落 os.name 分支。
 
@@ -19,4 +19,4 @@
 
 Windows 版本矩阵、Python/SQLite/FTS5 版本、路径语义、文件锁、replace、任务调度、zipapp 运行行为。
 
-E1 决定：Python 3.11、3.12、3.13 纳入支持矩阵。Windows NTFS 是第一正式验收平台，Linux 只做 CI 烟测，macOS 暂不承诺。
+E1 决定：Python 3.11、3.12、3.13 纳入支持矩阵。Windows NTFS、Linux 和 macOS APFS 均运行组件测试。macOS 默认索引位于用户 Library/Caches，注册数据位于用户 Library/Application Support。

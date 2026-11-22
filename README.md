@@ -1,12 +1,23 @@
 # kbkit
 
-kbkit 是面向 AI Agent 的本地 Markdown 知识库组件。它提供块级检索、CLI、stdio MCP 和可加载的 Skill。Markdown 可继续用原来的编辑器维护，索引可重建，核心运行无需模型或第三方 Python 运行时依赖。
+kbkit 是一个可从 Git 使用的本地 Markdown 知识库。仓库附带可读、可索引的示例库，以及 CLI、stdio MCP、Agent Skill 和备份与恢复。核心无需模型或第三方 Python 运行时依赖。
 
-`main` 是开发和试用入口。项目尚未正式发版。
+从 `main` 安装当前开发版。准备 Python 3.11–3.13 和 SQLite FTS5。
 
-## 从 Git 安装
+## 安装并打开示例库
 
-准备 Python 3.11–3.13（含 SQLite FTS5）。在 Windows PowerShell 中执行：
+macOS 或 Linux
+
+```sh
+git clone https://github.com/jmr-circumlunar/kbkit.git
+cd kbkit
+python3 -m venv .venv
+./.venv/bin/python -m pip install --no-deps .
+./.venv/bin/python -m kbkit setup
+./.venv/bin/python -m kbkit search knowledge 知识库备份 --json
+```
+
+Windows PowerShell
 
 ```powershell
 git clone https://github.com/jmr-circumlunar/kbkit.git
@@ -14,24 +25,24 @@ cd kbkit
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --no-deps .
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
-.\.venv\Scripts\python.exe -m kbkit doctor
+.\.venv\Scripts\python.exe -m kbkit setup
+.\.venv\Scripts\python.exe -m kbkit search knowledge 知识库备份 --json
 ```
 
-Linux 和 macOS 使用 `./.venv/bin/python` 作为虚拟环境的解释器。跨电脑复测时，用 `git rev-parse HEAD` 记录实际测试的提交。
+示例内容在 [knowledge](knowledge/00-索引/工作空间上下文.md)。可将该目录直接作为 Obsidian 仓库打开。安装到当前环境后，kbc 与 `python -m kbkit` 执行相同的命令。
 
-## 交给 Agent 使用
+## 接入 Agent 或已有知识库
 
-1. 把仓库 URL 交给 Agent。由 Agent 克隆并安装，准备仓库 `skills/` 下的 Skill，询问现有知识库路径或确认新库路径。Codex 项目使用 `.agents/skills/`，Claude Code 项目使用 `.claude/skills/`。各宿主实测范围见 [Skill 兼容矩阵](docs/quality/SKILL_COMPATIBILITY.md)。
-2. Agent 使用虚拟环境执行 `python -m kbkit init <vault>`。MCP 宿主使用同一解释器执行 `python -m kbkit mcp stdio`，环境变量 `KBKIT_VAULT` 指向库的绝对路径。
-3. 用 `kb_write_plan` 预览，再用 `kb_write_apply` 创建第一篇笔记。将预览的 `plan_hash` 交回写入工具。用 `kb_search` 找到结果，再用 `kb_read` 按块或按章节核对。
-4. 手动维护执行 `python -m kbkit task run <vault>`。如需定时维护，由 Agent 首次询问频率和授权范围，然后在对应宿主创建计划。用户后续在宿主修改计划，日常执行写入报告供回查。
+`kbc setup <vault> --project <project> --host codex` 会初始化并索引知识库，为指定项目生成 MCP、Skill、常驻查询规则和 SessionStart Hook。将宿主改成 claude 可配置 Claude Code。Agent 启动时可读取明确授权的一篇路由笔记，配置时用 `--context-note` 指定库内路径。示例库默认采用自己的路由笔记。需要手动挂接 MCP 时，执行 `kbc mcp stdio`，并设置 `KBKIT_VAULT` 为知识库绝对路径。
 
-## 使用现有知识库
+进入已配置的项目并开启新会话。询问「怎么备份知识库」，可检查 Agent 是否先使用 `kb_search`，再使用 `kb_read` 验证来源。宿主自己处理项目和 Hook 信任。
 
-- `kb_status` 会报告排除路径、源状态分布及未知状态。可在 `profile.toml` 中设置排除目录、白名单例外、类型和生命周期别名，现有笔记可以保留原位置和字段。配置样例见 [接口与配置](docs/architecture/INTERFACES.md)。
-- 默认返回最多 8 个检索块。用 `kb_outline` 看大文件的标题树，用 `kb_read` 定向读取。CLI 可执行 `kbc search <vault> <query> --json` 获取结构化结果。
-- `knowledge review` 保存已复核版本和显式依赖。依据发生漂移时，下游从默认检索退出；`knowledge history` 可取回历史版本。
-- `knowledge bind-code` 绑定授权的本地 Git ref 和文件范围。维护自动刷新实现索引页，保留提交 SHA、路径和 Python 顶层符号。代码正文保留在仓库。普通知识页由 Agent 核验源证据后更新并复核。
-- 移动已注册的库，执行 `kbc add <path> --identity moved` 保留身份。保留源库及副本时，用 `kbc add <path> --identity copy` 给副本分配身份。
+## 使用和维护
 
-详见 [知识治理使用指南](docs/architecture/KNOWLEDGE_FRESHNESS.md)、[变更记录](CHANGELOG.md)和 [Apache-2.0 许可](LICENSE)。
+- `kbc search <vault> <query> --json` 搜索知识。大文档可用 `kb_outline` 和 `kb_read` 定向读取。显式查默认排除区时，提供路径并启用历史范围。
+- `kbc write plan <vault> <operations.json>` 预览写入。`kbc write apply <vault> <operations.json> --plan-hash <hash>` 应用同一个计划。Agent 对应调用 `kb_write_plan` 和 `kb_write_apply`。
+- `kbc task run <vault>` 手动维护。需定期执行时，由使用者在对应 Agent 宿主保存时间和来源范围。定时运行写出报告供回查。
+- `kbc backup create <vault> <archive>` 备份，`kbc backup verify <archive>` 校验，`kbc backup restore <archive> <destination>` 恢复到新目录或空目录。
+- 已启用外置元数据的知识库搬迁后，用 `kbc add <new> --identity moved --from <old>` 保留其身份。
+
+[接口与配置](docs/architecture/INTERFACES.md) · [知识治理](docs/architecture/KNOWLEDGE_FRESHNESS.md) · [变更记录](CHANGELOG.md) · [Apache-2.0 许可](LICENSE)

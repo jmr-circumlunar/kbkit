@@ -28,12 +28,14 @@ def _snapshot(root):
     if not (metadata_dir(root) / "profile.toml").is_file():
         raise ValueError("vault is not initialized; run kbc init first")
     with file_lock(metadata_dir(root) / "maintenance.lock"):
-        _build_index(root)
+        _build_index(root, verify=False)
         with closing(sqlite3.connect(index_path(root))) as connection:
             yield connection
 
 
 def _status(doc: dict, profile, override: dict | None) -> dict:
+    if profile.require_state and "state" not in doc:
+        return {"state": "unknown", "reason": "missing_state"}
     state = doc.get("state", "active")
     canonical = profile.canonical_state(state)
     if override and override["state"] != "active":
@@ -71,7 +73,7 @@ def _excerpt(content: str, terms: list[str], max_chars: int, *, full: bool) -> t
 def search_page(root, query: str = "", include_inactive: bool = False, *, limit: int | None = 8,
                 offset: int = 0, max_chars: int = 1200, max_bytes: int = 36_000,
                 select: str = "snippet", path=None, kind=None, state=None, tags=None, symbols=None,
-                exclude=None, budget_chars: int | None = None) -> dict:
+                exclude=None, budget_chars: int | None = None, include_excluded: bool = False) -> dict:
     if not isinstance(query, str) or len(query) > 2048:
         raise ValueError("query must be a string of at most 2048 characters")
     if type(include_inactive) is not bool:
@@ -82,6 +84,10 @@ def search_page(root, query: str = "", include_inactive: bool = False, *, limit:
     if budget_chars is not None:
         integer(budget_chars, "budget_chars", 16, 200_000)
     paths = tuple(map(prefix, values(path, "path")))
+    if type(include_excluded) is not bool:
+        raise ValueError("include_excluded must be a boolean")
+    if include_excluded and not paths:
+        raise ValueError("historical search requires an explicit vault-relative path")
     exclusions = tuple(map(prefix, values(exclude, "exclude")))
     kinds, states, requested_tags = values(kind, "kind"), values(state, "state"), set(values(tags, "tags"))
     symbols = values(symbols, "symbols")
@@ -101,7 +107,7 @@ def search_page(root, query: str = "", include_inactive: bool = False, *, limit:
         candidates = {
             name: (doc, status, source_hash)
             for name, doc, status, source_hash in entries
-            if not profile.excluded(name)
+            if (include_excluded or not profile.excluded(name))
             and (not paths or matches_prefix(name, paths))
             and not matches_prefix(name, exclusions)
             and (include_inactive or status["state"] not in profile.inactive or status["state"] in states)

@@ -15,7 +15,7 @@ INACTIVE_STATES = frozenset({"draft", "archived", "deprecated", "stale", "unveri
 STATE_ALIASES = {
     "active": "active", "review_due": "review_due", "生效": "active", "已生效": "active", "有效": "active",
     "草稿": "draft", "待确认": "unreviewed", "待审核": "unreviewed",
-    "已归档": "archived", "归档": "archived", "已终结": "archived", "已关闭": "archived", "已完成": "archived",
+    "已被取代": "deprecated", "已归档": "archived", "归档": "archived", "已终结": "archived", "已关闭": "archived", "已完成": "archived",
     "废弃": "deprecated", "已废弃": "deprecated", "已过期": "stale", "暂缓": "unverified", "冻结": "unverified",
 }
 
@@ -55,9 +55,11 @@ class Profile:
     exclude: tuple[str, ...] = ()
     allow: tuple[str, ...] = ()
     kinds: tuple[str, ...] = ()
+    require_state: bool = False
     inactive: frozenset[str] = INACTIVE_STATES
     aliases: dict[str, str] = field(default_factory=lambda: STATE_ALIASES.copy())
     disabled_rules: frozenset[str] = frozenset()
+    provenance_kinds: tuple[str, ...] = ()
     provenance_fields: tuple[str, ...] = ("source", "review_by")
     allowed_fields: tuple[str, ...] = ()
     tag_vocabulary: tuple[str, ...] | None = None
@@ -102,7 +104,12 @@ def load_profile(root: Path) -> Profile:
     weights = [search.get(key, 1.0) for key in ("title_weight", "body_weight")]
     if any(type(value) not in (int, float) or not math.isfinite(value) or not 0 < value <= 100 for value in weights):
         raise ValueError("title_weight and body_weight must be greater than 0 and at most 100")
+    require_state = search.get("require_state", False)
+    if type(require_state) is not bool:
+        raise ValueError("search.require_state must be a boolean")
     return Profile(
+        require_state=require_state,
+        provenance_kinds=_strings(lint.get("provenance_kinds", ()), "lint.provenance_kinds"),
         exclude=tuple(map(prefix, _strings(exclude, "search.exclude.prefixes"))),
         allow=tuple(map(prefix, _strings(allow, "search.exclude.allow"))),
         kinds=_strings(search.get("kinds", ()), "search.kinds"),

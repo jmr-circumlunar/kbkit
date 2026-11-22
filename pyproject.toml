@@ -19,3 +19,11 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.data-files]
+"share/kbkit/skills/kb-author" = ["skills/kb-author/SKILL.md"]
+"share/kbkit/skills/kb-ingest" = ["skills/kb-ingest/SKILL.md"]
+"share/kbkit/skills/kb-maintain" = ["skills/kb-maintain/SKILL.md"]
+"share/kbkit/skills/kb-onboard" = ["skills/kb-onboard/SKILL.md"]
+"share/kbkit/skills/kb-query" = ["skills/kb-query/SKILL.md"]
+"share/kbkit/starter/00-索引" = ["knowledge/00-索引/*.md"]

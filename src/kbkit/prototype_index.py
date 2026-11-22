@@ -28,9 +28,12 @@ def _han_run(text: str) -> str:
     return f"{grams} {last}" if grams else last
 
 
+_cached_han_run = lru_cache(maxsize=8192)(_han_run)
+
+
 def _search_tokens(content: str) -> tuple[str, str]:
     parts = _HAN_RUN.split(content)
-    han = " boundary ".join(_han_run(part) for part in parts[1::2])
+    han = " boundary ".join(_cached_han_run(part) if len(part) <= 64 else _han_run(part) for part in parts[1::2])
     return " ".join(parts[::2]), han
 
 

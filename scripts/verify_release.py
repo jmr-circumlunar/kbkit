@@ -57,7 +57,13 @@ runpy.run_module('pip', run_name='__main__')
     exercise = guard + """
 from pathlib import Path
 from kbkit.application import ApplicationService
-app = ApplicationService(Path(sys.argv[1]))
+from kbkit.onboarding import setup
+from kbkit.skills import list_skills
+vault = Path(sys.argv[1])
+result = setup(vault, vault.parent / 'offline-project', 'codex', None)
+if not result['indexed_blocks'] or len(list_skills()) != 5:
+    raise RuntimeError('starter notes or bundled skills are missing')
+app = ApplicationService(vault)
 app.initialize()
 result = app.apply_operations([
     {'operation': 'create', 'path': 'offline.md', 'content': '# Offline proof\\n\\nlocaltoken'}
@@ -75,7 +81,7 @@ def verify(url: str, branch: str | None, expected_sha: str | None, evidence: dic
         root = Path(directory)
         clone, vault, repo = (root / name for name in ("clone", "vault", "code"))
         env = os.environ.copy()
-        for name in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "KBKIT_VAULT"):
+        for name in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "KBKIT_VAULT", "KBKIT_HOME"):
             env.pop(name, None)
         env.update({
             "PYTHONIOENCODING": "utf-8", "PYTHONNOUSERSITE": "1", "GIT_TERMINAL_PROMPT": "0",
@@ -101,6 +107,20 @@ def verify(url: str, branch: str | None, expected_sha: str | None, evidence: dic
 
         require("FTS5: available" in cli("doctor"), "doctor did not confirm FTS5")
         checks["clean_install"] = "passed"
+        starter = clone / "knowledge"
+        hosted = json.loads(cli("setup", str(starter), "--project", str(root / "agent-project"), "--host", "codex"))
+        require(hosted["indexed_blocks"] > 0 and len(hosted["files"]) >= 8, "clone onboarding did not provision knowledge and skills")
+        require(json.loads(cli("search", str(starter), "知识库备份", "--json"))["hits"], "starter knowledge is not searchable")
+        ctx = json.loads(cli("context", str(starter), "--note", "00-索引/工作空间上下文.md"))
+        require("工作空间上下文" in ctx["hookSpecificOutput"]["additionalContext"], "Chinese hook context is missing")
+        archive = root / "starter.zip"
+        cli("backup", "create", str(starter), str(archive))
+        require(json.loads(cli("backup", "verify", str(archive)))["ok"], "starter backup did not verify")
+        restored = root / "restored"
+        cli("backup", "restore", str(archive), str(restored))
+        require((restored / "00-索引" / "工作空间上下文.md").read_bytes() ==
+                (starter / "00-索引" / "工作空间上下文.md").read_bytes(), "backup changed starter note bytes")
+        checks["clone_onboarding_and_backup"] = "passed"
         cli("init", str(vault))
         checks["init"] = "passed"
         env["KBKIT_VAULT"] = str(vault)
@@ -222,6 +242,11 @@ def verify(url: str, branch: str | None, expected_sha: str | None, evidence: dic
         run(root, [python, str(packages[0]), "--version"], env)
         require("FTS5: available" in run(root, [python, str(packages[0]), "doctor"], env).stdout, "zipapp doctor did not confirm FTS5")
         evidence["zipapp_sha256"] = hashlib.sha256(packages[0].read_bytes()).hexdigest()
+        bundled = json.loads(run(root, [python, str(packages[0]), "setup", str(root / "zip-vault"),
+                                       "--project", str(root / "zip-project"), "--host", "claude"], env).stdout)
+        require(bundled["indexed_blocks"] > 0 and len(bundled["files"]) >= 8, "zipapp did not bundle starter or skills")
+        command = json.loads((root / "zip-project" / ".mcp.json").read_bytes())["mcpServers"]["kbkit"]
+        require(command["args"][0] == str(packages[0].resolve()), "zipapp setup points to an installed module instead of itself")
         checks["zipapp"] = "passed"
 
 
