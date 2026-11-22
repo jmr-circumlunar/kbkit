@@ -9,6 +9,7 @@ import hashlib
 from pathlib import Path
 
 from .storage import metadata_dir
+from .transaction import find_journal
 
 
 def _executable(payload: dict) -> bool:
@@ -18,6 +19,7 @@ def _executable(payload: dict) -> bool:
 
 class StateStore:
     def __init__(self, root: Path) -> None:
+        self.root = root
         self.path = metadata_dir(root) / "state.sqlite"
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.connection = sqlite3.connect(self.path)
@@ -150,7 +152,7 @@ class StateStore:
                 payload = json.loads(stored)
             except json.JSONDecodeError:
                 continue
-            if not isinstance(payload, dict) or (self.path.parent / "transactions" / f"{proposal_id}.json").exists():
+            if not isinstance(payload, dict) or find_journal(self.root, proposal_id) is not None:
                 continue
             if ("rule" in payload and not _executable(payload)) or (payload.get("finding_rule") and stored not in active):
                 expired.append((proposal_id,))

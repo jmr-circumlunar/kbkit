@@ -69,6 +69,18 @@ def transaction_journals(root: Path) -> list[Path]:
     return sorted((metadata_dir(root) / "transactions").glob("*.json"))
 
 
+def find_journal(root: Path, transaction_id: str) -> Path | None:
+    active = metadata_dir(root) / "transactions" / f"{transaction_id}.json"
+    if active.is_file():
+        return active
+    receipt = _receipt_path(active)
+    return receipt if receipt.is_file() else None
+
+
+def _receipt_path(journal: Path) -> Path:
+    return journal.parent / "receipts" / journal.name
+
+
 def _read_journal(journal: Path) -> dict:
     record = json.loads(journal.read_bytes())
     if not isinstance(record, dict) or record.get("state") not in {"pending", "applied", "divergent", "resolved"}:
@@ -82,6 +94,7 @@ def guard_transactions(root: Path, paths: list[str] | None = None) -> None:
         try:
             record = _read_journal(journal)
             if record["state"] in {"applied", "resolved"}:
+                _archive_receipt(journal, record)
                 continue
             if wanted is not None:
                 if record["state"] == "divergent":
@@ -253,8 +266,11 @@ def apply_plan(root: Path, plan: dict, fail_after: int | None = None) -> dict:
 
 def transaction_status(root: Path, transaction_id: str) -> dict:
     transaction_id = str(uuid.UUID(transaction_id))
-    journal = metadata_dir(root) / "transactions" / f"{transaction_id}.json"
-    return _receipt(transaction_id, _read_journal(journal))
+    with file_lock(_lock_path(root)):
+        journal = find_journal(root, transaction_id)
+        if journal is None:
+            raise FileNotFoundError(f"transaction not found: {transaction_id}")
+        return _receipt(transaction_id, _read_journal(journal))
 
 
 def submit_operations(root: Path, operations: list[dict], plan_hash: str | None, request_id: str | None) -> dict:
@@ -265,8 +281,8 @@ def submit_operations(root: Path, operations: list[dict], plan_hash: str | None,
         if request_id is not None:
             request_id = str(uuid.UUID(request_id))
             request_hash = digest(json.dumps([operations, plan_hash], sort_keys=True).encode("utf-8"))
-            journal = metadata_dir(root) / "transactions" / f"{request_id}.json"
-            if journal.is_file():
+            journal = find_journal(root, request_id)
+            if journal is not None:
                 record = _read_journal(journal)
                 if record.get("request_hash") != request_hash:
                     raise TransactionError("request_id already belongs to different operations or a different preview")
@@ -290,7 +306,7 @@ def _apply_plan(root: Path, plan: dict, fail_after: int | None = None) -> dict:
     transaction_id = plan["transaction_id"]
     transaction_dir = metadata_dir(root) / "transactions"
     journal = transaction_dir / f"{transaction_id}.json"
-    if journal.exists():
+    if find_journal(root, transaction_id) is not None:
         raise TransactionError(f"transaction already exists: {transaction_id}")
     staging_dir = transaction_dir / transaction_id
     staging_dir.mkdir(parents=True, exist_ok=True)
@@ -339,6 +355,8 @@ def _trash(root: Path, data: bytes, change: dict) -> None:
 def recover_transaction(root: Path, journal: Path, *, accept_current: bool = False) -> str:
     root = root.resolve()
     with file_lock(_lock_path(root)):
+        if not journal.is_file() and journal.parent == metadata_dir(root) / "transactions":
+            journal = _receipt_path(journal)
         record = _read_journal(journal)
         if accept_current:
             if record["state"] == "resolved":
@@ -357,6 +375,7 @@ def recover_transaction(root: Path, journal: Path, *, accept_current: bool = Fal
                 hashes[change["path"]] = _current_hash(target)
             record.update(state="resolved", resolution_hashes=hashes)
             _save_json(journal, record)
+            _archive_receipt(journal, record)
             return "resolved"
         if record["state"] == "resolved":
             return "resolved"
@@ -367,6 +386,7 @@ def recover_transaction(root: Path, journal: Path, *, accept_current: bool = Fal
             if current == record["after_hash"]:
                 record["state"] = "applied"
                 _save_json(journal, record)
+                _archive_receipt(journal, record)
                 return "applied"
             if current == record["before_hash"]:
                 return "pending"
@@ -391,7 +411,7 @@ def _restore_quarantine(parked: Path, target: Path) -> None:
 
 def _recover(root: Path, journal: Path, record: dict, fail_after: int | None = None) -> str:
     if record["state"] == "applied":
-        _clear_staging(journal, record)
+        _archive_receipt(journal, record)
         return "applied"
     if record["state"] == "resolved":
         return "resolved"
@@ -463,8 +483,23 @@ def _recover(root: Path, journal: Path, record: dict, fail_after: int | None = N
         return _divergent(journal, record)
     record["state"] = "applied"
     _save_json(journal, record)
-    _clear_staging(journal, record)
+    _archive_receipt(journal, record)
     return "applied"
+
+
+def _archive_receipt(journal: Path, record: dict) -> None:
+    if journal.parent.name != "transactions":
+        return
+    if record["state"] == "applied":
+        _clear_staging(journal, record)
+    receipt = _receipt_path(journal)
+    try:
+        receipt.parent.mkdir(exist_ok=True)
+        if not receipt.exists():
+            journal.replace(receipt)
+    except OSError:
+        # The terminal journal remains valid in its original location.
+        pass
 
 
 def _clear_staging(journal: Path, record: dict) -> None:

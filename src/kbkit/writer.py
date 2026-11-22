@@ -10,7 +10,7 @@ from uuid import UUID
 from .prototype_lock import file_lock
 from .state import StateStore
 from .storage import metadata_dir
-from .transaction import PendingTransactionError, TransactionError, apply_plan, plan_operations, recover_transaction
+from .transaction import PendingTransactionError, TransactionError, apply_plan, find_journal, plan_operations, recover_transaction
 
 
 def apply_proposal(root: Path, proposal_id: str) -> dict:
@@ -28,8 +28,8 @@ def apply_proposal(root: Path, proposal_id: str) -> dict:
             raise ValueError("approve a low-risk proposal before applying it")
         if payload.get("operation") not in {"append", "set_prop"} or not payload.get("expected_hash"):
             raise ValueError("this legacy finding has no executable fix; inspect it with kb_lint")
-        journal = metadata_dir(root) / "transactions" / f"{proposal_id}.json"
-        if journal.exists():
+        journal = find_journal(root, proposal_id)
+        if journal is not None:
             outcome = recover_transaction(root, journal)
         else:
             try:

@@ -80,6 +80,26 @@ class AssessmentTests(unittest.TestCase):
         reused = self.request("kb_write_apply", **{**options, "operations": other})["structuredContent"]
         self.assertEqual(reused["code"], "KB_WRITE_CONFLICT")
 
+    def test_legacy_terminal_receipt_is_archived_without_replaying_write(self):
+        from kbkit import transaction
+
+        path = self.note("archived.md", "note\n")
+        operations = [{"operation": "append", "path": path.name, "content": " once"}]
+        preview = self.ok("kb_write_plan", operations=operations)
+        identity = preview["transaction_id"]
+        options = {"operations": operations, "plan_hash": preview["plan_hash"], "request_id": identity}
+        first = self.ok("kb_write_apply", **options)
+        archive = transaction.find_journal(self.root, identity)
+        self.assertEqual(archive.parent.name, "receipts")
+        active = archive.parent.parent / archive.name
+        archive.replace(active)
+        self.ok("kb_write_apply", operations=[{"operation": "create", "path": "other.md", "content": "other"}])
+        self.assertFalse(active.exists())
+        self.assertTrue(archive.is_file())
+        self.assertEqual(self.ok("kb_write_status", transaction_id=identity)["state"], "applied")
+        self.assertEqual(self.ok("kb_write_apply", **options), first)
+        self.assertEqual(path.read_text().count("once"), 1)
+
     def test_large_preview_pages_share_hash_and_mcp_frame_is_bounded(self):
         from kbkit.paging import json_size
 
@@ -189,7 +209,8 @@ class AssessmentTests(unittest.TestCase):
             self.assertFalse(source.exists())
             self.assertFalse(prior.exists())
             self.assertEqual(destination.read_text(), "payload")
-            entry = json.loads(journal.read_bytes())["changes"][2]["trash_id"]
+            status = self.ok("kb_write_status", transaction_id=plan["transaction_id"])
+            entry = status["trash"][0]["entry_id"]
             self.assertEqual(self.ok("kb_restore", entry_id=entry)["status"], "restored")
             self.assertEqual(prior.read_text(), f"unique{i}")
         self.assertTrue(all(file.stat().st_size for file in self.root.glob("*.md")))

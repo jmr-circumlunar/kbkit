@@ -29,7 +29,7 @@ from .prototype_mcp import handle
 from .registry import VaultRegistry
 from .state import StateStore
 from .storage import metadata_dir
-from .transaction import recover_transaction, transaction_journals
+from .transaction import find_journal, recover_transaction, transaction_journals
 from .vault_profile import index_path
 
 
@@ -261,11 +261,13 @@ def _vault_command(args) -> int:
     elif name == "recover":
         if args.accept_current and args.transaction_id is None:
             raise ValueError("--accept-current requires --transaction-id")
-        journals = transaction_journals(root)
-        if args.transaction_id is not None:
-            journals = [journal for journal in journals if journal.stem == str(args.transaction_id)]
-            if not journals:
+        if args.transaction_id is None:
+            journals = transaction_journals(root)
+        else:
+            journal = find_journal(root, str(args.transaction_id))
+            if journal is None:
                 raise ValueError(f"transaction not found: {args.transaction_id}")
+            journals = [journal]
         result = {}
         ok = True
         for journal in journals:
