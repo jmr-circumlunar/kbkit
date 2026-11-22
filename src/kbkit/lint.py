@@ -5,12 +5,15 @@ from __future__ import annotations
 from collections import Counter
 from pathlib import Path
 
-from .frontmatter import validate_frontmatter
+from .frontmatter import RULE_IDS as FRONTMATTER_RULE_IDS, validate_frontmatter
 from .graph import build_graph
 from .profile import load_profile
 from .prototype_markdown import parse_document
 from .storage import markdown_files
 from .transaction import digest
+
+
+RULE_IDS = FRONTMATTER_RULE_IDS | {"FM-FINAL-NEWLINE", "FM-COMPATIBILITY", "LINT-L01", "LINT-L02", "LINT-L04", "LINT-L11"}
 
 
 def lint(root: Path, *, graph: dict | None = None, protected=()) -> list[dict]:

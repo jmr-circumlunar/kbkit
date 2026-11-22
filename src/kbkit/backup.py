@@ -1,17 +1,18 @@
 """Archive a vault and publish a restore only after validating its contents."""
 
 from contextlib import closing
-import json
 import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import shutil
 import sqlite3
 import tempfile
 import unicodedata
-from zipfile import ZipFile, ZIP_DEFLATED
+from zipfile import BadZipFile, ZipFile, ZIP_DEFLATED
+from zlib import error as DeflateError
 
 from .prototype_lock import file_lock
 from .storage import metadata_dir, vault_files
+from .transaction import guard_transactions
 
 
 def create_backup(root: Path, destination: Path) -> dict:
@@ -25,13 +26,7 @@ def create_backup(root: Path, destination: Path) -> dict:
     state.mkdir(parents=True, exist_ok=True)
     names = []
     with file_lock(state / "maintenance.lock"), file_lock(state / "write.lock"):
-        for journal in sorted((state / "transactions").glob("*.json")):
-            try:
-                settled = json.loads(journal.read_bytes()).get("state") == "applied"
-            except (ValueError, AttributeError):
-                settled = False
-            if not settled:
-                raise ValueError(f"resolve the pending or damaged transaction before backup: {journal.name}")
+        guard_transactions(root)
         sources = [(path, path.relative_to(root).as_posix()) for path in vault_files(root)
                    if path != state and state not in path.parents and not path.name.startswith(".kbkit-")]
         for name in ("profile.toml", "knowledge.json", "automation.json"):
@@ -73,10 +68,20 @@ def _members(archive: ZipFile):
 
 
 def verify_backup(backup: Path) -> dict:
-    with ZipFile(backup) as archive:
-        list(_members(archive))
-        bad = archive.testzip()
-        return {"ok": bad is None, "first_bad": bad, "files": archive.namelist()}
+    names = []
+    member_name = None
+    try:
+        with ZipFile(backup) as archive:
+            names = archive.namelist()
+            for member, _ in _members(archive):
+                member_name = member.filename
+                with archive.open(member) as stream:
+                    while stream.read(1024 * 1024):
+                        pass
+                member_name = None
+    except (BadZipFile, DeflateError, EOFError, ValueError, RuntimeError) as error:
+        return {"ok": False, "first_bad": member_name, "files": names, "error": str(error)}
+    return {"ok": True, "first_bad": None, "files": names}
 
 
 def restore_backup(backup: Path, destination: Path) -> dict:
@@ -96,8 +101,11 @@ def restore_backup(backup: Path, destination: Path) -> dict:
                 continue
             target = staged.joinpath(*parts)
             target.parent.mkdir(parents=True, exist_ok=True)
-            with archive.open(member) as stream, target.open("xb") as file:
-                shutil.copyfileobj(stream, file)
+            try:
+                with archive.open(member) as stream, target.open("xb") as file:
+                    shutil.copyfileobj(stream, file)
+            except (DeflateError, EOFError, RuntimeError) as error:
+                raise BadZipFile(f"cannot restore {member.filename}: {error}") from error
             restored.append(member.filename)
         staged_state = staged / ".kbkit"
         published_state = False

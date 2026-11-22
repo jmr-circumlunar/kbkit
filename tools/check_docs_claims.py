@@ -23,6 +23,7 @@ from kbkit.prototype_mcp import OPERATIONS, handle
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_DOCS = [ROOT / "README.md", ROOT / "docs" / "architecture" / "INTERFACES.md",
+               ROOT / "docs" / "architecture" / "TRANSACTION_PROTOCOL.md",
                *sorted((ROOT / "skills").glob("*/SKILL.md"))]
 TOOL_NAME = re.compile(r"\bkb_[a-z][a-z_]*\b")
 CLI = re.compile(r"(?<![-\w])(?:-m\s+kbkit|\bkbc)\s+(?!-)([a-z][a-z-]*)(?:[ \t]+([a-z][a-z-]*))?")
@@ -76,6 +77,8 @@ def contract_samples():
             }
             responses["kb_write_apply"] = call("kb_write_apply", operations=write,
                                               plan_hash=responses["kb_write_plan"]["structuredContent"]["plan_hash"])
+            responses["kb_write_status"] = call("kb_write_status",
+                                                transaction_id=responses["kb_write_apply"]["structuredContent"]["transaction_id"])
             responses["kb_maintain"] = call("kb_maintain")
             run_id = responses["kb_maintain"]["structuredContent"]["run_id"]
             responses["kb_maintenance_report"] = call("kb_maintenance_report", run_id=run_id, collection="code_sync")
@@ -99,7 +102,8 @@ def contract_samples():
             pending = json.loads(journal.read_bytes())["state"]
             (vault / "sample.md").write_text("External edit", encoding="utf-8")
             divergent = recover_transaction(vault, journal)
-            return responses, delete, error, profile, {pending, divergent}, set(build_graph(vault))
+            resolved = recover_transaction(vault, journal, accept_current=True)
+            return responses, delete, error, profile, {pending, divergent, resolved}, set(build_graph(vault))
 
 
 def keys(value):

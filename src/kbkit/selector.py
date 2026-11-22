@@ -166,8 +166,3 @@ def resolve_source(root: Path, selector: dict, *, allow_missing_path: bool = Fal
     target = markdown_path(root, relative, allow_missing=allow_missing_path and not options)
     raw = target.read_bytes() if target.exists() else b""
     return target, select(raw, **options), raw
-
-
-def resolve_selector(root: Path, selector: dict, *, allow_missing_path: bool = False) -> tuple[Path, Selection]:
-    target, selection, _ = resolve_source(root, selector, allow_missing_path=allow_missing_path)
-    return target, selection

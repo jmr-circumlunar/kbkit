@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from kbkit.application import ApplicationService
-from kbkit.graph import build_graph, outline
+from kbkit.graph import build_graph
 from kbkit.lint import lint
 
 
@@ -22,7 +22,7 @@ class GovernanceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "note.md").write_text("# One\n## Two\n", encoding="utf-8")
-            self.assertEqual(outline(root, "note.md")[1]["level"], 2)
+            self.assertEqual(ApplicationService(root).outline("note.md")["outline"][1]["level"], 2)
 
     def test_lint_reports_empty_and_missing_provenance(self):
         with tempfile.TemporaryDirectory() as directory:

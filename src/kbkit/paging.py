@@ -25,12 +25,13 @@ def window(limit: int, offset: int, max_bytes: int) -> tuple[int, int, int]:
 
 
 def page(items, *, key: str, limit: int, offset: int, max_bytes: int,
-         total: int | None = None, presliced: bool = False, context: dict | None = None) -> dict:
+         total: int | None = None, presliced: bool = False, context: dict | None = None,
+         item_overhead=None) -> dict:
     total = len(items) if total is None else total
     result = {**(context or {}), key: [], "total": total, "truncated": True, "next_offset": offset}
     size = json_size(result) + 16
     for item in islice(items, 0 if presliced else offset, limit if presliced else offset + limit):
-        size += json_size(item) + 1
+        size += json_size(item) + 1 + (item_overhead(item) if item_overhead else 0)
         if size > max_bytes:
             break
         result[key].append(item)

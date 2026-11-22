@@ -9,6 +9,8 @@ from datetime import date
 
 ALLOWED_FIELDS = {"type", "kind", "state", "tags", "source", "owner", "review_by", "confidence", "visibility"}
 ALLOWED_VISIBILITY = {"private", "internal", "public"}
+RULE_IDS = {"FM-UNKNOWN", "FM-STATE", "FM-VISIBILITY", "FM-CONFIDENCE", "LIFE-003", "FM-REVIEW-BY",
+            "FM-SOURCE", "FM-OWNER", "FM-TAG"}
 DEFAULT_TAGS = {"project", "decision", "reference", "procedure", "meeting", "task"}
 
 

@@ -59,6 +59,45 @@ class TransactionError(ValueError):
     pass
 
 
+class PendingTransactionError(TransactionError):
+    def __init__(self, journal: Path) -> None:
+        self.transaction_id = journal.stem
+        super().__init__(f"Resolve the pending, divergent or damaged transaction {self.transaction_id} before proceeding.")
+
+
+def transaction_journals(root: Path) -> list[Path]:
+    return sorted((metadata_dir(root) / "transactions").glob("*.json"))
+
+
+def _read_journal(journal: Path) -> dict:
+    record = json.loads(journal.read_bytes())
+    if not isinstance(record, dict) or record.get("state") not in {"pending", "applied", "divergent", "resolved"}:
+        raise TransactionError(f"invalid transaction journal: {journal.name}")
+    return record
+
+
+def guard_transactions(root: Path, paths: list[str] | None = None) -> None:
+    wanted = {os.path.normcase(path) for path in paths} if paths is not None else None
+    for journal in transaction_journals(root):
+        try:
+            record = _read_journal(journal)
+            if record["state"] in {"applied", "resolved"}:
+                continue
+            if wanted is not None:
+                if record["state"] == "divergent":
+                    continue
+                if "target" in record:
+                    relative = Path(record["target"]).resolve().relative_to(root).as_posix()
+                    affected = {os.path.normcase(relative)}
+                else:
+                    affected = {os.path.normcase(change["path"]) for change in record["changes"]}
+                if wanted.isdisjoint(affected):
+                    continue
+        except (ValueError, OSError, KeyError, TypeError) as error:
+            raise PendingTransactionError(journal) from error
+        raise PendingTransactionError(journal)
+
+
 def _current_hash(target: Path) -> str | None:
     try:
         return digest(target.read_bytes())
@@ -84,6 +123,7 @@ def restore_from_trash(root: Path, entry_id: str) -> dict:
             raise TransactionError("trash entry not found")
         record = json.loads(manifest.read_bytes())
         target = markdown_path(root, record["original"], allow_missing=True)
+        guard_transactions(root.resolve(), [record["original"]])
         trash_path = trash_dir / Path(record["trash"]).name
         data = trash_path.read_bytes()
         if digest(data) != record["before_hash"]:
@@ -122,12 +162,6 @@ def _append_preview(before: bytes, end: int, content: str, *, targeted: bool) ->
 def _diff(before: str, after: str) -> str:
     changes = unified_diff(before.splitlines(), after.splitlines(), lineterm="", n=3)
     return "\n".join(changes)[:450]
-
-
-def plan_append(root: Path, operations: list[dict], dry_run: bool = True) -> dict:
-    if any(operation.get("operation") != "append" for operation in operations):
-        raise TransactionError("unsupported operation")
-    return plan_operations(root, operations, dry_run)
 
 
 def plan_operations(root: Path, operations: list[dict], dry_run: bool = True) -> dict:
@@ -217,8 +251,38 @@ def apply_plan(root: Path, plan: dict, fail_after: int | None = None) -> dict:
         return _apply_plan(root.resolve(), plan, fail_after)
 
 
-def _apply_plan(root: Path, plan: dict, fail_after: int | None) -> dict:
+def transaction_status(root: Path, transaction_id: str) -> dict:
+    transaction_id = str(uuid.UUID(transaction_id))
+    journal = metadata_dir(root) / "transactions" / f"{transaction_id}.json"
+    return _receipt(transaction_id, _read_journal(journal))
+
+
+def submit_operations(root: Path, operations: list[dict], plan_hash: str | None, request_id: str | None) -> dict:
+    if request_id is not None and not plan_hash:
+        raise TransactionError("request_id requires the plan_hash from a preview")
+    root = root.resolve()
+    with file_lock(_lock_path(root)):
+        if request_id is not None:
+            request_id = str(uuid.UUID(request_id))
+            request_hash = digest(json.dumps([operations, plan_hash], sort_keys=True).encode("utf-8"))
+            journal = metadata_dir(root) / "transactions" / f"{request_id}.json"
+            if journal.is_file():
+                record = _read_journal(journal)
+                if record.get("request_hash") != request_hash:
+                    raise TransactionError("request_id already belongs to different operations or a different preview")
+                _recover(root, journal, record)
+                return _receipt(request_id, record)
+        plan = plan_operations(root, operations, dry_run=False)
+        if plan_hash is not None and plan["plan_hash"] != plan_hash:
+            raise TransactionError("plan no longer matches; preview again before applying")
+        if request_id is not None:
+            plan.update(transaction_id=request_id, request_hash=request_hash)
+        return _apply_plan(root, plan)
+
+
+def _apply_plan(root: Path, plan: dict, fail_after: int | None = None) -> dict:
     changes = plan["changes"]
+    guard_transactions(root, [change.relative_path for change in changes])
     for change in changes:
         target = markdown_path(root, change.relative_path, allow_missing=True)
         if _current_hash(target) != change.before_hash:
@@ -226,11 +290,15 @@ def _apply_plan(root: Path, plan: dict, fail_after: int | None) -> dict:
     transaction_id = plan["transaction_id"]
     transaction_dir = metadata_dir(root) / "transactions"
     journal = transaction_dir / f"{transaction_id}.json"
+    if journal.exists():
+        raise TransactionError(f"transaction already exists: {transaction_id}")
     staging_dir = transaction_dir / transaction_id
     staging_dir.mkdir(parents=True, exist_ok=True)
     records = []
     for index, change in enumerate(changes):
         record = {"path": change.relative_path, "before_hash": change.before_hash}
+        if change.position is not None:
+            record["position"] = change.position
         if change.after is not None:
             staging = staging_dir / f"{index}.after"
             write_atomic(staging, change.after)
@@ -242,12 +310,19 @@ def _apply_plan(root: Path, plan: dict, fail_after: int | None) -> dict:
             record["trash_id"] = str(uuid.uuid5(uuid.UUID(transaction_id), change.relative_path))
         records.append(record)
     data = {"version": 2, "state": "pending", "transaction_id": transaction_id, "changes": records}
+    if "request_hash" in plan:
+        data["request_hash"] = plan["request_hash"]
     _save_json(journal, data)
-    state = _recover(root, journal, data, fail_after)
-    result = {"transaction_id": transaction_id, "state": state, "paths": [c.relative_path for c in changes]}
-    if state == "applied":
-        result["positions"] = [{"path": c.relative_path, **c.position} for c in changes if c.position is not None]
-        result["trash"] = [{"path": c["path"], "entry_id": c["trash_id"]} for c in records if "trash_id" in c]
+    _recover(root, journal, data, fail_after)
+    return _receipt(transaction_id, data)
+
+
+def _receipt(transaction_id: str, data: dict) -> dict:
+    changes = data.get("changes", [])
+    result = {"transaction_id": transaction_id, "state": data["state"], "paths": [c["path"] for c in changes]}
+    if data["state"] == "applied":
+        result["positions"] = [{"path": c["path"], **c["position"]} for c in changes if "position" in c]
+        result["trash"] = [{"path": c["path"], "entry_id": c["trash_id"]} for c in changes if "trash_id" in c]
     return result
 
 
@@ -261,14 +336,42 @@ def _trash(root: Path, data: bytes, change: dict) -> None:
     })
 
 
-def recover_transaction(root: Path, journal: Path) -> str:
+def recover_transaction(root: Path, journal: Path, *, accept_current: bool = False) -> str:
+    root = root.resolve()
     with file_lock(_lock_path(root)):
-        record = json.loads(journal.read_bytes())
+        record = _read_journal(journal)
+        if accept_current:
+            if record["state"] == "resolved":
+                return "resolved"
+            if record["state"] != "divergent":
+                raise TransactionError("only a divergent transaction can accept the current files")
+            changes = record.get("changes")
+            if not changes:
+                relative = Path(record["target"]).resolve().relative_to(root).as_posix()
+                changes = [{"path": relative}]
+            hashes = {}
+            for change in changes:
+                target = markdown_path(root, change["path"], allow_missing=True)
+                if "quarantine" in change and target.with_name(change["quarantine"]).exists():
+                    raise TransactionError(f"reconcile the quarantined file for {change['path']} before accepting current files")
+                hashes[change["path"]] = _current_hash(target)
+            record.update(state="resolved", resolution_hashes=hashes)
+            _save_json(journal, record)
+            return "resolved"
+        if record["state"] == "resolved":
+            return "resolved"
         if "target" in record:
-            from .prototype_transaction import recover
-
-            return recover(journal)
-        return _recover(root.resolve(), journal, record)
+            relative = Path(record["target"]).resolve().relative_to(root).as_posix()
+            target = markdown_path(root, relative, allow_missing=True)
+            current = _current_hash(target) or digest(b"")
+            if current == record["after_hash"]:
+                record["state"] = "applied"
+                _save_json(journal, record)
+                return "applied"
+            if current == record["before_hash"]:
+                return "pending"
+            return _divergent(journal, record)
+        return _recover(root, journal, record)
 
 
 def _divergent(journal: Path, record: dict) -> str:
@@ -288,7 +391,10 @@ def _restore_quarantine(parked: Path, target: Path) -> None:
 
 def _recover(root: Path, journal: Path, record: dict, fail_after: int | None = None) -> str:
     if record["state"] == "applied":
+        _clear_staging(journal, record)
         return "applied"
+    if record["state"] == "resolved":
+        return "resolved"
     work = []
     legacy = record.get("version") != 2
     for change in record["changes"]:
@@ -357,4 +463,22 @@ def _recover(root: Path, journal: Path, record: dict, fail_after: int | None = N
         return _divergent(journal, record)
     record["state"] = "applied"
     _save_json(journal, record)
+    _clear_staging(journal, record)
     return "applied"
+
+
+def _clear_staging(journal: Path, record: dict) -> None:
+    if record.get("version") != 2:
+        return
+    folder = journal.with_suffix("")
+    if not folder.is_dir() or folder.is_symlink() or folder.resolve().parent != journal.parent.resolve():
+        return
+    # The applied receipt is durable before discarding redo data.
+    try:
+        for index, change in enumerate(record["changes"]):
+            image = folder / f"{index}.after"
+            if change.get("staging") == image.relative_to(journal.parent).as_posix():
+                image.unlink(missing_ok=True)
+        folder.rmdir()
+    except OSError:
+        pass

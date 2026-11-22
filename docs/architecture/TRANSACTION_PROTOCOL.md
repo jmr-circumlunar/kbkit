@@ -1,94 +1,28 @@
 # 写入一致性与恢复协议
 
-状态：高风险核心设计，必须先做 Windows 原型和故障注入，不得仅凭协议图宣称 all-or-nothing。
+kbkit 在本地 Markdown 上提供单文件原子替换和多文件前滚恢复。普通写入和恢复使用同一个库级写锁。CLI、MCP 和定时任务应使用同一外置元数据路径，确保它们看到同一把锁及同一份日志。
 
-## 1. 要防范的失败
+## 写入与回执
 
-- 漂移：修改到错误块或错误文件。
-- 覆盖：用户在预检后手工修改，Agent 把它覆盖。
-- 半成品：bulk 操作只应用一部分。
-- 崩溃：进程退出或系统异常时留有中间状态。
-- 派生数据不一致：正文已写入但索引未同步。
-- 外部并发：第三方编辑器不遵守 kbkit 锁协议。
+1. 预览解析路径和写入位置，为整批操作计算计划哈希。大批次可以按偏移查看预览。
+2. 应用时重新计算哈希。复用稳定请求 UUID 时，按同一请求查询回执或续跑。提交的内容和预览哈希发生变化则拒绝复用该 UUID。
+3. 在写锁下检查是否存在涉及相同路径的待恢复事务。确认旧内容的哈希后，写入暂存图像和 `pending` 日志。已存在的路径在替换前再次比较内容。
+4. 逐个发布目标文件。删除操作先把旧正文放入回收站。只有全批校验后才写 `applied` 回执。清理已应用的暂存正文，保留事务回执。
+5. 刷新并校验受影响的路径。写入状态与派生索引的状态独立报告。定时维护核对全库。Git 可以在内容应用后另做版本快照。
 
-## 2. 候选事务流程
+## 恢复
 
-1. 校验请求、权限、路径和 selector。
-2. 获取 vault 写锁；读取目标文件并记录 before_hash。
-3. 生成完整 after-image、影响清单和写后断言。
-4. dry-run 返回 diff；用户确认后继续。
-5. 在目标卷内写 staging 文件，flush 文件内容。
-6. 写入 journal，记录事务 ID、目标路径、before_hash、after_hash、after-image 位置、状态和 schema 版本；确认 journal 可恢复后才修改目标。
-7. 逐文件应用替换；每个目标应用前再次核对当前 hash。
-8. 写后读取并校验 after_hash、Markdown 结构和业务断言。
-9. 标记内容已应用；执行局部索引更新。
-10. 索引失败时保留正确正文，设置 index_dirty，提供重建入口。
-11. 可选 Git commit 在内容事务之外执行；提交失败不回滚已正确写入的正文。
-12. 清理 staging/journal 前确认恢复信息已安全归档或按保留策略处理。
+- `pending` 表示写入中断，允许按日志继续前滚。
+- `applied` 表示正文已写入并校验。以原 UUID 幂等重试可取回同一事务。
+- `divergent` 表示至少有一处发生冲突。保留现场，Agent 可以提示受影响的路径并协助合并。
+- 人工核对并处理冲突后，可用 `kbc recover <vault> --transaction-id <uuid> --accept-current` 按现状结案。日志保留当时文件哈希。状态成为 `resolved`，已有正文原样保留。
 
-## 3. 恢复三态
+`kb_write_status` 和 `kbc write status <vault> <uuid>` 可查询单批回执。CLI 恢复命令也支持一次检查多份日志。待恢复或未结案的冲突会阻止备份。
 
-- applied：目标内容已等于 after-image，跳过。
-- pending：目标仍等于 before-image，允许按 journal 前滚。
-- divergent：目标既不等于 before-image，也不等于 after-image，绝不自动覆盖；保留 journal 并要求人工解决。
+## 保证边界
 
-恢复必须幂等：重复运行不会二次破坏数据。
+- 多个文件依次发布，读取方可能看到中间状态。外部编辑器独立管理自己的写入，kbkit 通过写入前的哈希比较和恢复时的校验检测冲突。
+- 测试覆盖进程中断前滚、重试去重、回收站和外部编辑保留。断电时的目录持久性、网络共享盘和第三方同步盘需独立验证。
+- 查询按变更标记检查外部写入。全量索引和定时维护会校验正文哈希。
 
-## 4. 必须区分的保证
-
-| 保证 | 含义 | 当前状态 |
-|---|---|---|
-| 单文件替换原子性 | 单个文件替换时读者不会看到半个文件 | 需按 Windows API/文件句柄行为验证 |
-| 进程崩溃后可恢复 | 重启后 journal 可识别并完成前滚或报告冲突 | 设计目标 |
-| kbkit API 读写隔离 | kbkit 读者不会在事务应用中读到混合版本 | 需要读锁/事务状态门禁原型 |
-| 第三方编辑器全局原子可见 | Obsidian 等在多个文件逐个替换时永远只见旧版或新版 | 不承诺，除非另有实现与证据 |
-| 断电/硬件故障耐久性 | OS/磁盘缓存和目录元数据在掉电后仍满足保证 | Windows 需专项验证，不能仅凭 Python flush/fsync 推断 |
-
-## 5. 锁与外部编辑器
-
-- kbkit 内部采用单 vault 单写者锁；读者锁策略需明确。
-- 外部编辑器不参与锁协议，依靠写前 hash 和写后断言发现冲突。
-- 事务期间检测到 divergent，停止该文件自动覆盖，保留 journal。
-- Windows 本地 NTFS 为首要验证环境；网络共享盘、同步盘和云盘暂不承诺相同语义。
-
-## 6. 七个故障注入点（源自原始方案）
-
-| ID | 注入位置 | 恢复预期 |
-|---|---|---|
-| TXN-01 | staging 写到一半时 kill | 目标文件未改；残留 staging 可安全清理 |
-| TXN-02 | journal 完成、目标尚未改时 kill | 恢复识别 pending，前滚到 after-image |
-| TXN-03 | 替换到第 N 个文件时 kill | 恢复后全部目标达到 after-image，或明确进入人工冲突处理 |
-| TXN-04 | 局部索引更新中 kill | 正文不回滚；index_dirty 可检测并重建 |
-| TXN-05 | Git 提交前/中失败 | 正文状态保持已应用；Git 状态可诊断，不伪称提交成功 |
-| TXN-06 | 第二个写请求并发进入 | 写锁串行化或明确返回 busy/conflict |
-| TXN-07 | 事务中第三方修改目标文件 | divergent；绝不覆盖外部新内容；journal 保留 |
-
-## 7. 需要原型验证的 Windows 风险
-
-- os.replace 对已打开文件、杀毒软件和编辑器文件句柄的行为。
-- staging 与目标是否确保同卷。
-- msvcrt/Win32 文件锁的跨进程行为与崩溃释放。
-- 文件 FlushFileBuffers、目录元数据持久化和断电保证。
-- 长路径、权限、只读属性、杀毒软件短暂占用和重试策略。
-- journal 原子更新和恢复时的再次崩溃。
-
-## 8. 错误契约
-
-写入返回错误不能证明回滚已发生。必须区分 rolled_back、partially_applied、unknown、completed_with_index_dirty 等结果；不确定时明确告知目标路径和恢复动作，不能说“已回滚”。
-
-
-## 9. Windows 官方 API 核验补充
-
-截至 2026-11-17，已核对 Microsoft 官方资料：
-
-- ReplaceFileW 是单文件替换函数；替换文件、原文件和可选备份必须位于同一卷。
-- ReplaceFileW 的 REPLACEFILE_WRITE_THROUGH 标志官方明确标记为“不支持”。
-- FlushFileBuffers 刷新指定文件句柄的缓冲数据；官方说明刷新整个卷需要卷句柄和管理员权限。
-- 因此，不能把 POSIX 的“文件 fsync + 父目录 fsync”未经验证地等价移植到 Windows，也不能把 ReplaceFileW 视作多文件原子事务。
-
-官方资料：
-- ReplaceFileW：https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-replacefilew
-- FlushFileBuffers：https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers
-- Moving and Replacing Files：https://learn.microsoft.com/en-us/windows/win32/fileio/moving-and-replacing-files
-
-结论：E2 必须在真实 Windows 本地磁盘上验证 staging 同卷、文件句柄占用、ReplaceFileW/os.replace 行为、FlushFileBuffers、journal 恢复和再次崩溃。验证前不承诺断电级 durability。
+[接口与配置](INTERFACES.md) · [多文件事务设计记录](../adr/0004-multifile-transaction-guarantees.md)

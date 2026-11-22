@@ -6,6 +6,7 @@ import json
 import re
 import sqlite3
 import zlib
+from contextlib import closing
 from functools import lru_cache
 
 
@@ -156,12 +157,10 @@ class FtsIndex:
         return self.connection.execute("SELECT count(*) FROM block_text").fetchone()[0]
 
 
-def fts5_available() -> bool:
-    connection = sqlite3.connect(":memory:")
-    try:
-        connection.execute("CREATE VIRTUAL TABLE probe USING fts5(content)")
-    except sqlite3.Error:
-        return False
-    finally:
-        connection.close()
-    return True
+def fts5_error() -> str | None:
+    with closing(sqlite3.connect(":memory:")) as connection:
+        try:
+            connection.execute("CREATE VIRTUAL TABLE probe USING fts5(content)")
+        except sqlite3.Error as error:
+            return str(error)
+    return None

@@ -9,18 +9,19 @@ from contextlib import closing
 from pathlib import Path
 
 from .consistency import check_consistency
-from .core import _document_metadata, build_index, init_vault, maintain
+from .core import _build_index, _document_metadata, build_index, init_vault, maintain
 from .graph import build_graph
 from .knowledge import KnowledgeVault
 from .lint import lint
-from .paging import integer, json_size, page, window
-from .profile import load_profile
+from .paging import MAX_PAYLOAD_BYTES, integer, json_size, page, window
+from .profile import load_profile, matches_prefix
+from .prototype_lock import file_lock
 from .registry import VaultRegistry
 from .retrieval import _rows, _snapshot, _status, facets, search_page
 from .selector import SelectorError, block_locator, headings, markdown_path, select, source_lines
 from .state import StateStore
 from .storage import metadata_dir
-from .transaction import TransactionError, apply_plan, plan_operations, restore_from_trash
+from .transaction import plan_operations, restore_from_trash, submit_operations, transaction_status
 from .writer import apply_proposal
 
 
@@ -44,7 +45,7 @@ class ApplicationService:
         return facets(self.vault, **options)
 
     def read(self, path: str | None = None, *, heading=None, block_id=None, lines=None, max_bytes=8000) -> dict:
-        integer(max_bytes, "max_bytes", 512, 60_000)
+        integer(max_bytes, "max_bytes", 512, MAX_PAYLOAD_BYTES)
         if sum(value is not None for value in (heading, block_id, lines)) > 1:
             raise SelectorError("choose one of heading, block_id or lines")
         block = None
@@ -90,6 +91,7 @@ class ApplicationService:
                       truncated=last < selection.end or result.get("line_truncated", False))
         if last < selection.end:
             result["next_lines"] = [last + 1, selection.end]
+            result["hint"] = "Use next_lines to read the rest of the selected range."
         if result.get("line_truncated"):
             result["hint"] = "A source line exceeds max_bytes. Increase max_bytes or inspect the local file."
         return result
@@ -102,21 +104,34 @@ class ApplicationService:
         statuses = []
         source_states, effective, unknown = Counter(), Counter(), Counter()
         indexed_blocks = None
+        unmatched = set(profile.exclude) | set(profile.allow)
+        excluded_documents = 0
         if profile_path.is_file():
             with _snapshot(self.vault) as connection:
                 indexed_blocks = connection.execute("SELECT count(*) FROM block_text").fetchone()[0]
-                for _, doc, status, _ in _rows(connection, knowledge, profile):
+                reviewed = knowledge.statuses(profile)
+                for path, doc, status, _ in _rows(connection, reviewed, profile):
+                    unmatched.difference_update([entry for entry in unmatched if matches_prefix(path, (entry,))])
+                    excluded_documents += profile.excluded(path)
                     raw = doc.get("state")
                     if raw is not None:
                         source_states[raw] += 1
                         if profile.canonical_state(raw) == "unknown":
                             unknown[raw] += 1
                     effective[status["state"]] += 1
-            statuses = [{"path": path, **value} for path, value in sorted(knowledge.statuses(profile).items())]
+            statuses = [{"path": path, **value} for path, value in sorted(reviewed.items())]
         context = {"initialized": profile_path.is_file(), "vault": str(self.vault), "profile": str(profile_path),
                    "indexed_blocks": indexed_blocks, "unknown_state_documents": sum(unknown.values()),
                    "excluded_paths": [], "allowed_paths": [], "state_counts": {}, "source_state_counts": {},
                    "unknown_state_counts": {}, "summary_truncated": False}
+        config_warnings = list(profile.warnings)
+        config_warnings.extend(f"Path prefix matched no indexed Markdown: {path}" for path in sorted(unmatched))
+        fields = []
+        if config_warnings:
+            context["config_warnings"] = []
+            fields.append(("config_warnings", (message[:400] for message in config_warnings)))
+        if profile.exclude:
+            context["excluded_documents"] = excluded_documents
         if unknown:
             context["warning"] = "Unknown states are excluded by default; configure states.aliases."
         budget = max_bytes - 120
@@ -133,7 +148,7 @@ class ApplicationService:
                 context[key] = segment
             size = json_size(context)
         for key, values in (
-            ("excluded_paths", profile.exclude), ("allowed_paths", profile.allow),
+            *fields, ("excluded_paths", profile.exclude), ("allowed_paths", profile.allow),
             ("state_counts", effective.most_common()), ("source_state_counts", source_states.most_common()),
             ("unknown_state_counts", unknown.most_common()),
         ):
@@ -174,6 +189,8 @@ class ApplicationService:
             "run_id", "status", "blocks", "changed_blocks", "proposals", "expired_proposals", "report_path"
         ) if key in report}
         summary["code_sync_counts"] = dict(Counter(row["status"] for row in report.get("code_sync", [])))
+        if "consistency" in report:
+            summary["index_consistent"] = report["consistency"]["ok"]
         summary["graph_counts"] = {key: len(report["graph"][key]) for key in ("nodes", "edges", "broken")} if "graph" in report else {}
         if "error" in report:
             summary["error"] = str(report["error"])[:500]
@@ -194,26 +211,34 @@ class ApplicationService:
     def restore(self, entry_id: str) -> dict:
         return self._refresh_after_write(restore_from_trash(self.vault, entry_id))
 
-    def plan_operations(self, operations: list[dict]) -> dict:
+    def plan_operations(self, operations: list[dict], limit=100, offset=0, max_bytes=36_000) -> dict:
+        limit, offset, max_bytes = window(limit, offset, max_bytes)
         plan = plan_operations(self.vault, operations)
         previews = [{
             "path": change.relative_path, "operation": change.operation,
             "before_hash": change.before_hash, "removed": change.after is None,
             "position": change.position, "preview": change.preview,
         } for change in plan["changes"]]
-        return {"transaction_id": plan["transaction_id"], "plan_hash": plan["plan_hash"],
-                "dry_run": True, "changes": [item["path"] for item in previews], "previews": previews}
+        result = page(previews, key="previews", limit=limit, offset=offset, max_bytes=max_bytes,
+                      context={"transaction_id": plan["transaction_id"], "plan_hash": plan["plan_hash"],
+                               "dry_run": True, "changes": []}, item_overhead=lambda item: json_size(item["path"]) + 1)
+        result["changes"] = [item["path"] for item in result["previews"]]
+        return result
 
-    def apply_operations(self, operations: list[dict], plan_hash: str | None = None) -> dict:
-        plan = plan_operations(self.vault, operations, dry_run=False)
-        if plan_hash is not None and plan["plan_hash"] != plan_hash:
-            raise TransactionError("plan no longer matches; preview again before applying")
-        return self._refresh_after_write(apply_plan(self.vault, plan))
+    def apply_operations(self, operations: list[dict], plan_hash: str | None = None,
+                         request_id: str | None = None) -> dict:
+        return self._refresh_after_write(submit_operations(self.vault, operations, plan_hash, request_id))
+
+    def write_status(self, transaction_id: str) -> dict:
+        return transaction_status(self.vault, transaction_id)
 
     def _refresh_after_write(self, result: dict) -> dict:
         try:
-            build_index(self.vault)
-            result["consistency"] = check_consistency(self.vault)
+            paths = tuple(result.get("paths") or [result["path"]])
+            init_vault(self.vault)
+            with file_lock(metadata_dir(self.vault) / "maintenance.lock"):
+                _build_index(self.vault, selected=paths)
+                result["consistency"] = check_consistency(self.vault, paths)
         except (OSError, sqlite3.Error, ValueError) as error:
             result["consistency"] = {"ok": False, "errors": [str(error)]}
         result["index_dirty"] = not result["consistency"]["ok"]
@@ -242,8 +267,13 @@ class ApplicationService:
     def _outline(raw, relative, limit, offset, max_bytes):
         items = [{"level": h.level, "title": h.path[-1], "heading_path": list(h.path),
                   "line": h.start + 1, "lines": [h.start + 1, h.end]} for h in headings(raw)]
-        return page(items, key="outline", limit=limit, offset=offset, max_bytes=max_bytes,
-                    context={"path": relative})
+        result = page(items, key="outline", limit=limit, offset=offset, max_bytes=max_bytes,
+                      context={"path": relative})
+        if result["outline"] and result["truncated"]:
+            hint = "Use next_offset for the remaining headings."
+            if json_size({**result, "hint": hint}) <= max_bytes:
+                result["hint"] = hint
+        return result
 
     def outline(self, path: str, limit=8, offset=0, max_bytes=640) -> dict:
         limit, offset, max_bytes = window(limit, offset, max_bytes)

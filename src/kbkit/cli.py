@@ -9,6 +9,7 @@ import shutil
 import sqlite3
 import sys
 import tempfile
+from uuid import UUID
 from contextlib import closing
 from pathlib import Path
 from zipfile import BadZipFile
@@ -21,12 +22,14 @@ from .core import init_vault
 from .git_adapter import GitUnavailable
 from .knowledge import KnowledgeVault
 from .onboarding import session_context, setup
+from .profile import load_profile
+from .prototype_index import fts5_error
 from .prototype_lock import file_lock
 from .prototype_mcp import handle
 from .registry import VaultRegistry
 from .state import StateStore
 from .storage import metadata_dir
-from .transaction import recover_transaction
+from .transaction import recover_transaction, transaction_journals
 from .vault_profile import index_path
 
 
@@ -53,10 +56,14 @@ def build_parser() -> argparse.ArgumentParser:
     context.add_argument("vault", type=Path)
     context.add_argument("--note")
     write = commands.add_parser("write", help="Plan or apply operations from a JSON file, or from - for stdin.")
-    write.add_argument("action", choices=["plan", "apply"])
+    write.add_argument("action", choices=["plan", "apply", "status"])
     write.add_argument("vault", type=Path)
-    write.add_argument("operations")
+    write.add_argument("operations", help="JSON file or - for stdin, or the transaction UUID for status.")
     write.add_argument("--plan-hash")
+    write.add_argument("--request-id")
+    write.add_argument("--limit", type=int, default=100)
+    write.add_argument("--offset", type=int, default=0)
+    write.add_argument("--max-bytes", type=int, default=36_000)
     backup = commands.add_parser("backup", help="Archive, verify or restore a vault.")
     backup_actions = backup.add_subparsers(dest="action", required=True)
     for action in ("create", "verify", "restore"):
@@ -102,6 +109,10 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument("--status")
         if name == "restore":
             command.add_argument("entry_id")
+        if name == "recover":
+            command.add_argument("--transaction-id", type=UUID)
+            command.add_argument("--accept-current", action="store_true",
+                                 help="Record the reconciled files of one divergent transaction.")
 
     knowledge = commands.add_parser("knowledge", help="Review revisions and bind committed code sources.")
     actions = knowledge.add_subparsers(dest="knowledge_action", required=True)
@@ -130,11 +141,8 @@ def _json(value) -> None:
 def _doctor(root: Path | None) -> int:
     print(f"Python: {sys.version.split()[0]} (minimum 3.11)")
     print(f"SQLite: {sqlite3.sqlite_version}")
-    try:
-        with closing(sqlite3.connect(":memory:")) as connection:
-            connection.execute("CREATE VIRTUAL TABLE fts_probe USING fts5(content)")
-    except sqlite3.Error as exc:
-        print(f"FTS5: unavailable ({exc})")
+    if error := fts5_error():
+        print(f"FTS5: unavailable ({error})")
         return 1
     print("FTS5: available")
     print(f"Git: {'available' if shutil.which('git') else 'unavailable (needed for Git features)'}")
@@ -148,6 +156,8 @@ def _doctor(root: Path | None) -> int:
     print(f"Vault: {'initialized' if initialized else 'not initialized'} ({root})")
     if not initialized:
         return 1
+    for warning in load_profile(root).warnings:
+        print(f"Profile: {warning}")
     try:
         directory = index_path(root, create=True).parent
         with tempfile.TemporaryFile(dir=directory):
@@ -167,7 +177,7 @@ def _stdio() -> int:
             continue
         try:
             message = json.loads(line.decode("utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError):
+        except (ValueError, RecursionError):
             response = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "invalid JSON"}}
         else:
             response = handle(message, service)
@@ -236,7 +246,7 @@ def _vault_command(args) -> int:
             sys.stdout.write(result["content"])
         return 0
     if name == "index":
-        print(f"blocks: {service.index()['blocks']}")
+        print(f"changed_blocks: {service.index()['blocks']}")
         return 0
     if name == "outline":
         result = service.outline(args.relative_path, **window)
@@ -249,16 +259,22 @@ def _vault_command(args) -> int:
         _json(result)
         return int(result["status"] != "succeeded")
     elif name == "recover":
-        journals = sorted((metadata_dir(root) / "transactions").glob("*.json"))
+        if args.accept_current and args.transaction_id is None:
+            raise ValueError("--accept-current requires --transaction-id")
+        journals = transaction_journals(root)
+        if args.transaction_id is not None:
+            journals = [journal for journal in journals if journal.stem == str(args.transaction_id)]
+            if not journals:
+                raise ValueError(f"transaction not found: {args.transaction_id}")
         result = {}
         ok = True
         for journal in journals:
             try:
-                outcome = recover_transaction(root, journal)
+                outcome = recover_transaction(root, journal, accept_current=args.accept_current)
             except (ValueError, OSError, KeyError, TypeError) as error:
                 outcome = {"state": "error", "message": str(error)}
             result[journal.name] = outcome
-            ok = ok and outcome == "applied"
+            ok = ok and outcome in ("applied", "resolved")
         _json(result)
         return int(not ok)
     elif name == "restore":
@@ -288,11 +304,16 @@ def main() -> int:
         elif args.command == "context":
             _json(session_context(args.vault, args.note))
         elif args.command == "write":
-            source = sys.stdin.buffer.read() if args.operations == "-" else Path(args.operations).read_bytes()
-            operations = json.loads(source)
             service = ApplicationService(args.vault)
-            result = (service.plan_operations(operations) if args.action == "plan"
-                      else service.apply_operations(operations, args.plan_hash))
+            if args.action == "status":
+                result = service.write_status(args.operations)
+            else:
+                source = sys.stdin.buffer.read() if args.operations == "-" else Path(args.operations).read_bytes()
+                operations = json.loads(source)
+                if args.action == "plan":
+                    result = service.plan_operations(operations, args.limit, args.offset, args.max_bytes)
+                else:
+                    result = service.apply_operations(operations, args.plan_hash, args.request_id)
             _json(result)
             return int(result.get("state") == "divergent")
         elif args.command == "backup":

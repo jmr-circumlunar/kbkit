@@ -12,14 +12,14 @@ Agent 一次写入可能修改多个 Markdown 文件及其链接、元数据。�
 采用 write-ahead + image-based redo：
 - 预检、锁、before hash、after-image、staging、journal 先行；
 - 逐文件应用前再次检查 before hash；
-- applied/pending/divergent 三态恢复；
+- 应用、待恢复和冲突结果可查询；人工处理冲突后可登记结案；
 - divergent 永不自动覆盖；
 - 索引失败只标 index_dirty，不回滚正确正文；
-- Git commit 在内容事务之后执行，失败不伪称正文回滚。
+- Git 快照是内容事务完成后的可选操作。
 
 ## 保证边界
 
-目标是进程崩溃后可恢复、重复恢复幂等、kbkit API 读写可通过锁隔离。第三方编辑器不遵循锁协议，因此不承诺其在多文件逐个替换期间看到全局原子快照。Windows 断电耐久性在专项原型前不作保证。
+进程崩溃后可继续前滚，重复恢复幂等。写请求串行化，读者可能在逐文件发布期间看到中间状态。第三方编辑器采用独立的写入机制。Windows 断电耐久性需要专项验证。
 
 ## 验证
 

@@ -6,7 +6,6 @@ import re
 from pathlib import Path
 import unicodedata
 
-from .selector import headings, markdown_path
 from .storage import markdown_files, vault_files
 
 
@@ -63,9 +62,3 @@ def build_graph(root: Path) -> dict:
                 incoming[resolved] += 1
     orphaned = [path for path, count in incoming.items() if count == 0]
     return {"edges": edges, "broken": broken, "nodes": sorted(paths), "backlinks": incoming, "orphaned": orphaned}
-
-
-def outline(root: Path, relative_path: str) -> list[dict]:
-    raw = markdown_path(root, relative_path).read_bytes()
-    return [{"level": heading.level, "title": heading.path[-1], "heading_path": list(heading.path),
-             "line": heading.start + 1, "lines": [heading.start + 1, heading.end]} for heading in headings(raw)]

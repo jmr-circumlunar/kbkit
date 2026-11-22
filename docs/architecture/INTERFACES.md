@@ -22,7 +22,7 @@ stdio 使用 UTF-8。服务协商 `2025-11-25` 或 `2025-06-18`，工具结果�
 | 状态和索引 | `kb_status`、`kb_index` |
 | 检索和阅读 | `kb_search`、`kb_read`、`kb_outline`、`kb_facet`、`kb_graph` |
 | 维护 | `kb_maintain`、`kb_maintenance_report`、`kb_lint`、`kb_proposals`、`kb_proposal_apply` |
-| 事务 | `kb_write_plan`、`kb_write_apply`、`kb_restore` |
+| 事务 | `kb_write_plan`、`kb_write_apply`、`kb_write_status`、`kb_restore` |
 
 ### 检索与导航
 
@@ -42,15 +42,16 @@ stdio 使用 UTF-8。服务协商 `2025-11-25` 或 `2025-06-18`，工具结果�
 
 ### 写入与恢复
 
-`kb_write_plan` 和 `kb_write_apply` 接收 `operations`，支持 `create`、`append`、`move`、`rename`、`delete`、`set_prop`。`set_prop` 只支持已有 frontmatter 中可无歧义更新的标量字段。
+`kb_write_plan` 和 `kb_write_apply` 接收 `operations`，支持 `create`、`append`、`move`、`rename`、`delete`、`set_prop`。`set_prop` 可在已有 frontmatter 中新增或更新单行标量字段。
 
-- 提供 `path` 或 `selector`，二选一。`append` 用 `{"path":"note.md","heading_path":["设计","边界"]}` 追加到该章节末尾，用 `{"block_id":"note.md:1"}` 追加到该索引块末尾，用 `{"path":"note.md","line_range":[12,18]}` 插到第 18 行后。无匹配或章节重名时停止。
-- 预览提供 `plan_hash`、各项 `before_hash`、位置、有限的前后文和差异。把 `plan_hash` 提交给 `kb_write_apply` 可拒绝预览后的变更。成功返回 `positions`，并通过 `state` 区分 `applied` 和 `divergent`；中断的写入可能留下 `pending` 日志，通过 `kbc recover <vault>` 检查。
-- 删除成功后源文件消失，返回 `trash` 中的 `entry_id`，可用 `kb_restore` 恢复。移动和改名后源文件消失。`index_dirty` 指出 Markdown 事务结果与索引刷新结果需要分别检查。
+- 提供 `path` 或 `selector`，二选一。`append` 的 `selector` 可设为 `{"path":"note.md","heading_path":["设计","边界"]}`，追加到章节（含子章节）的末尾。用 `{"block_id":"note.md:1"}` 追加到索引块末尾，用 `{"path":"note.md","line_range":[12,18]}` 插到第 18 行后。无匹配或章节重名时停止。
+- 预览返回整批 `plan_hash`，可通过 `next_offset` 取得其余位置、上下文和差异。使用相同操作重新请求下一页，并核对哈希。MCP 调用使用带 operations 字段的对象。CLI 的操作文件只写 JSON 数组本身。
+- 应用时传入预览的 `plan_hash` 和一个稳定的 `request_id`。可使用第一页预览的事务 UUID。结果不明时调用 `kb_write_status` 或 `kbc write status <vault> <uuid>`。用同一 UUID 与原始请求安全重试。恢复中断的批次用 `kbc recover <vault> --transaction-id <uuid>`。
+- 删除成功后源文件消失，返回 `trash` 中的 `entry_id`，可用 `kb_restore` 恢复。移动和改名后源文件消失。写入只刷新、校验受影响的文件。定时维护做全库核验。`index_dirty` 表示本次派生索引刷新需跟进。
 
 ## Vault profile
 
-初始化命令会打印 `profile.toml` 位置。下面是可选配置示例，保留原有 `vault_uuid` 和 `schema_version`。
+初始化命令会打印 `profile.toml` 位置。下面是可选配置示例，保留原有 `vault_uuid` 和 `schema_version`。`kb_status` 报告未知配置键、未知体检规则、未匹配的路径前缀及实际排除数。前缀按完整目录段匹配。表内的 allow 优先，表内省略 allow 时采用搜索段的 allow。如果两处值不同，会提示冲突。
 
 ```toml
 [search]
@@ -76,7 +77,7 @@ provenance_kinds = ["现状"]
 allowed_fields = ["product", "project"]
 ```
 
-`lint.tags` 可选，用于限制标签词表。未知字段、状态和标签按库汇总。未识别生命周期默认从搜索中排除，`kb_status` 会报告原始取值。修改搜索权重、路径排除或状态映射无需重建索引。
+`lint.tags` 可选，用于限制标签词表。未知字段、状态和标签按库汇总。未识别生命周期默认从搜索中排除，`kb_status` 会报告原始取值。修改搜索权重、路径排除或状态映射无需重建索引。排除用于默认检索与分面。直接指定笔记的读取和大纲、全库体检仍可见这些笔记。把归档范围限制与访问授权分别配置。
 
 默认元数据保存在库的 `.kbkit/`。在新库初始化之前，可将 `KBKIT_HOME` 指向库外的绝对路径，CLI、MCP 宿主和定时任务应使用同一设置。目录按库的位置分配。`KBKIT_INDEX_DIR` 可单独指定索引位置。已有库切换外置位置前先保留原元数据备份。
 

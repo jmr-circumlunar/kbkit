@@ -52,6 +52,7 @@ def matches_prefix(path: str, prefixes: tuple[str, ...]) -> bool:
 
 @dataclass(frozen=True)
 class Profile:
+    warnings: tuple[str, ...] = ()
     exclude: tuple[str, ...] = ()
     allow: tuple[str, ...] = ()
     kinds: tuple[str, ...] = ()
@@ -80,17 +81,32 @@ def load_profile(root: Path) -> Profile:
     file = metadata_dir(root) / "profile.toml"
     if not file.is_file():
         return Profile()
-    config = tomllib.loads(file.read_text(encoding="utf-8"))
+    try:
+        config = tomllib.loads(file.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError as error:
+        raise ValueError(f"invalid vault profile {file}: {error}") from error
     search = config.get("search", {})
     states = config.get("states", {})
     lint = config.get("lint", {})
     if any(not isinstance(table, dict) for table in (search, states, lint)):
         raise ValueError("search, states and lint settings must be TOML tables")
+    warnings = []
+    for table, namespace, known in (
+        (config, "", {"vault_uuid", "schema_version", "search", "states", "lint"}),
+        (search, "search.", {"exclude", "allow", "kinds", "require_state", "title_weight", "body_weight"}),
+        (states, "states.", {"aliases", "inactive"}),
+        (lint, "lint.", {"disable", "provenance_kinds", "provenance_fields", "allowed_fields", "tags"}),
+    ):
+        warnings.extend(f"Unknown profile key: {namespace}{key}" for key in sorted(table.keys() - known))
     exclude = search.get("exclude", ())
+    allow = search.get("allow", ())
     if isinstance(exclude, dict):
-        exclude, allow = exclude.get("prefixes", ()), exclude.get("allow", ())
-    else:
-        allow = search.get("allow", ())
+        warnings.extend(f"Unknown profile key: search.exclude.{key}" for key in sorted(exclude.keys() - {"prefixes", "allow"}))
+        if "allow" in exclude:
+            if "allow" in search and exclude["allow"] != allow:
+                warnings.append("Both allow settings differ. search.exclude.allow takes precedence.")
+            allow = exclude["allow"]
+        exclude = exclude.get("prefixes", ())
     user_aliases = states.get("aliases", {})
     if not isinstance(user_aliases, dict):
         raise ValueError("states.aliases must be a TOML table")
@@ -107,14 +123,18 @@ def load_profile(root: Path) -> Profile:
     require_state = search.get("require_state", False)
     if type(require_state) is not bool:
         raise ValueError("search.require_state must be a boolean")
+    disabled = frozenset(_strings(lint.get("disable", ()), "lint.disable"))
+    from .lint import RULE_IDS
+
+    warnings.extend(f"Unknown lint rule: {rule}" for rule in sorted(disabled - RULE_IDS))
     return Profile(
-        require_state=require_state,
+        warnings=tuple(warnings), require_state=require_state,
         provenance_kinds=_strings(lint.get("provenance_kinds", ()), "lint.provenance_kinds"),
         exclude=tuple(map(prefix, _strings(exclude, "search.exclude.prefixes"))),
         allow=tuple(map(prefix, _strings(allow, "search.exclude.allow"))),
         kinds=_strings(search.get("kinds", ()), "search.kinds"),
         inactive=inactive, aliases={key.casefold(): value for key, value in aliases.items()},
-        disabled_rules=frozenset(_strings(lint.get("disable", ()), "lint.disable")),
+        disabled_rules=disabled,
         provenance_fields=_strings(lint.get("provenance_fields", ("source", "review_by")), "lint.provenance_fields"),
         allowed_fields=_strings(lint.get("allowed_fields", ()), "lint.allowed_fields"),
         tag_vocabulary=_strings(lint["tags"], "lint.tags") if "tags" in lint else None,

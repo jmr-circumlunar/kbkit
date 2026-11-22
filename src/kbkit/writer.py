@@ -10,7 +10,7 @@ from uuid import UUID
 from .prototype_lock import file_lock
 from .state import StateStore
 from .storage import metadata_dir
-from .transaction import TransactionError, apply_plan, plan_operations, recover_transaction
+from .transaction import PendingTransactionError, TransactionError, apply_plan, plan_operations, recover_transaction
 
 
 def apply_proposal(root: Path, proposal_id: str) -> dict:
@@ -37,6 +37,8 @@ def apply_proposal(root: Path, proposal_id: str) -> dict:
                 plan = plan_operations(root, [operation], dry_run=False)
                 plan["transaction_id"] = proposal_id
                 outcome = apply_plan(root, plan)["state"]
+            except PendingTransactionError:
+                raise
             except (TransactionError, FileNotFoundError):
                 state.set_proposal_status(proposal_id, "conflicted")
                 raise

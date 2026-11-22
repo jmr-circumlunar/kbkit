@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .storage import app_data_dir, metadata_dir
 
-from .vault_profile import assign_copy_id, vault_id
+from .vault_profile import assign_copy_id, init_vault, vault_id
 
 
 class VaultRegistry:
@@ -32,19 +32,27 @@ class VaultRegistry:
             self.connection.execute("BEGIN IMMEDIATE")
             if moved_from is not None and identity != "moved":
                 raise ValueError("--from requires --identity moved")
-            if identity == "moved" and not (metadata_dir(root) / "profile.toml").is_file():
-                self._relocate_external_state(root, moved_from)
+            has_profile = (metadata_dir(root) / "profile.toml").is_file()
+            entry = self.connection.execute("SELECT vault_uuid FROM vaults WHERE path = ?", (str(root),)).fetchone()
+            if not has_profile:
+                if identity == "moved":
+                    self._relocate_external_state(root, moved_from)
+                elif identity == "copy" and root.is_dir() and entry is None:
+                    init_vault(root)
+                elif entry is not None:
+                    raise ValueError(f"registered vault profile is missing for {root}; locate its original metadata")
+                else:
+                    raise ValueError(f"vault is not initialized at {root}; use kbc init, or specify a moved or copied vault")
             value = vault_id(root)
+            if entry is not None and entry[0] != value:
+                raise ValueError(f"this path is registered as {entry[0]} but its profile contains {value}")
             previous = self.connection.execute("SELECT path FROM vaults WHERE vault_uuid = ?", (value,)).fetchone()
             different_location = previous is not None and Path(previous[0]) != root
             if different_location and identity is None:
                 raise ValueError("vault UUID already registered at a different path; choose --identity moved or --identity copy")
             if identity == "moved" and different_location and Path(previous[0]).is_dir() and (metadata_dir(Path(previous[0])) / "profile.toml").is_file():
                 raise ValueError("the original vault still exists; register this as a copy")
-            if identity == "copy" and (different_location or previous is None):
-                registered = self.connection.execute("SELECT 1 FROM vaults WHERE path = ?", (str(root),)).fetchone()
-                if registered:
-                    raise ValueError("this path is already registered with a different UUID")
+            if identity == "copy" and has_profile and (different_location or previous is None):
                 value = assign_copy_id(root)
             self.connection.execute(
                 "INSERT INTO vaults VALUES (?, ?, ?) ON CONFLICT(vault_uuid) DO UPDATE SET path = excluded.path, name = excluded.name",

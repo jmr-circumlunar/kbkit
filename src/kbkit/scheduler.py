@@ -1,4 +1,4 @@
-"""Agent-host scheduler configuration records."""
+"""Portable schedule metadata; the Agent host owns timers and execution policy."""
 
 from __future__ import annotations
 

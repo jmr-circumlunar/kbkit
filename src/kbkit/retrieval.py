@@ -45,8 +45,7 @@ def _status(doc: dict, profile, override: dict | None) -> dict:
     return {"state": "active"}
 
 
-def _rows(connection, knowledge, profile):
-    statuses = knowledge.statuses(profile)
+def _rows(connection, statuses, profile):
     for path, raw, source_hash in connection.execute("SELECT path, metadata, content_hash FROM documents ORDER BY path"):
         doc = json.loads(raw or "{}")
         status = _status(doc, profile, statuses.get(path))
@@ -70,7 +69,7 @@ def _excerpt(content: str, terms: list[str], max_chars: int, *, full: bool) -> t
     return ("…" if start else "") + content[start:end] + ("…" if end < len(content) else ""), hit, True
 
 
-def search_page(root, query: str = "", include_inactive: bool = False, *, limit: int | None = 8,
+def search_page(root, query: str = "", include_inactive: bool = False, *, limit: int = 8,
                 offset: int = 0, max_chars: int = 1200, max_bytes: int = 36_000,
                 select: str = "snippet", path=None, kind=None, state=None, tags=None, symbols=None,
                 exclude=None, budget_chars: int | None = None, include_excluded: bool = False) -> dict:
@@ -96,12 +95,12 @@ def search_page(root, query: str = "", include_inactive: bool = False, *, limit:
     query = query.strip()
     if not (query or paths or kinds or states or requested_tags or symbols):
         raise ValueError("supply a query or at least one positive search filter")
-    page_limit = -1 if limit is None else window(integer(limit, "limit", 1, 50), offset, max_bytes)[0]
+    page_limit, offset, max_bytes = window(integer(limit, "limit", 1, 50), offset, max_bytes)
     profile = load_profile(root)
     states = tuple(profile.aliases.get(value.casefold(), value.casefold()) for value in states)
     _validate_enum("state", states, profile.inactive | {"active", "review_due"})
     with _snapshot(root) as connection:
-        entries = list(_rows(connection, KnowledgeVault(root), profile))
+        entries = list(_rows(connection, KnowledgeVault(root).statuses(profile), profile))
         allowed_kinds = set(profile.kinds) or (KINDS | {doc["kind"] for _, doc, _, _ in entries if doc.get("kind")})
         _validate_enum("kind", kinds, allowed_kinds)
         candidates = {
@@ -138,15 +137,13 @@ def search_page(root, query: str = "", include_inactive: bool = False, *, limit:
             remaining = max_chars if budget_chars is None else min(max_chars, budget_chars - used)
             if remaining < 16:
                 break
-            text, position, clipped = _excerpt(content, terms, (len(content) + 1) if limit is None else remaining, full=select == "full")
+            text, position, clipped = _excerpt(content, terms, remaining, full=select == "full")
             hit.update(content=text, content_truncated=clipped,
                        hit_line=start + content[:position].count("\n"), heading=heading)
             used += len(text)
         if select == "json":
             hit.update(kind=doc.get("kind"), tags=doc.get("tags", []))
         hits.append(hit)
-    if limit is None:
-        return {"hits": hits}
     result = page(hits, key="hits", limit=limit, offset=offset, max_bytes=max_bytes, total=total,
                   presliced=True, context={"total_candidates": total})
     result["truncated"] |= any(hit.get("content_truncated") for hit in result["hits"])
@@ -161,7 +158,7 @@ def facets(root, *, path=None, dimension="all", limit=25, offset=0, max_bytes=36
     profile = load_profile(root)
     counts = {name: Counter() for name in dimensions}
     with _snapshot(root) as connection:
-        for name, doc, status, _ in _rows(connection, KnowledgeVault(root), profile):
+        for name, doc, status, _ in _rows(connection, KnowledgeVault(root).statuses(profile), profile):
             if profile.excluded(name) or (prefixes and not matches_prefix(name, prefixes)):
                 continue
             counts["tags"].update(set(doc.get("tags", ())))

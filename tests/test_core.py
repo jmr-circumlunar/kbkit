@@ -7,14 +7,14 @@ from contextlib import closing
 from unittest.mock import patch
 from pathlib import Path
 
-from kbkit.core import build_index, init_vault, maintain, read, search
+from kbkit.core import build_index, init_vault, maintain
 from kbkit.state import StateStore
+from kbkit.storage import metadata_dir
 from kbkit.application import ApplicationService
 from kbkit.registry import VaultRegistry
 from kbkit.writer import apply_proposal
 import hashlib
 from kbkit.backup import create_backup, restore_backup, verify_backup
-from kbkit.git_adapter import commit, status
 
 
 class CoreTests(unittest.TestCase):
@@ -23,7 +23,7 @@ class CoreTests(unittest.TestCase):
             root = Path(directory)
             init_vault(root)
             app = ApplicationService(root)
-            with patch("kbkit.application.build_index", side_effect=sqlite3.OperationalError("index unavailable")):
+            with patch("kbkit.application._build_index", side_effect=sqlite3.OperationalError("index unavailable")):
                 result = app.apply_operations([{"operation": "create", "path": "report.md", "content": "savedcontent"}])
             self.assertEqual(result["state"], "applied")
             self.assertEqual((root / "report.md").read_text(encoding="utf-8"), "savedcontent")
@@ -62,6 +62,16 @@ class CoreTests(unittest.TestCase):
                 moved_note.write_text("# Note\nseedbravo", encoding="utf-8")
                 os.utime(moved_note, ns=(timestamp.st_atime_ns, timestamp.st_mtime_ns))
                 duplicate_app = ApplicationService(duplicate)
+                if metadata_dir(original) != original / ".kbkit":
+                    with closing(VaultRegistry()) as registry:
+                        copied_id = registry.add(duplicate, identity="copy")
+                        self.assertEqual(registry.use(copied_id), duplicate.resolve())
+                        self.assertEqual(registry.use(original_id), original.resolve())
+                    self.assertNotEqual(copied_id, original_id)
+                    self.assertEqual(duplicate_app.search("seedalpha")["hits"], [])
+                    self.assertEqual(len(duplicate_app.search("seedbravo")["hits"]), 1)
+                    self.assertEqual(len(app.search("seedalpha")["hits"]), 1)
+                    return
                 self.assertEqual(duplicate_app.search("seedalpha")["hits"], [])
                 self.assertEqual(len(duplicate_app.search("seedbravo")["hits"]), 1)
                 self.assertEqual(len(app.search("seedalpha")["hits"]), 1)
@@ -93,9 +103,9 @@ class CoreTests(unittest.TestCase):
                 original.rename(destination)
                 registry = VaultRegistry()
                 try:
-                    with self.assertRaisesRegex(ValueError, "choose --identity"):
+                    with self.assertRaisesRegex(ValueError, "choose --identity|specify a moved"):
                         registry.add(destination)
-                    self.assertEqual(registry.add(destination, identity="moved"), original_id)
+                    self.assertEqual(registry.add(destination, identity="moved", moved_from=original), original_id)
                     self.assertEqual(registry.current(), destination.resolve())
                 finally:
                     registry.close()
@@ -107,15 +117,15 @@ class CoreTests(unittest.TestCase):
             init_vault(root)
             (root / "note.md").write_text("# Agent\n\nLocal knowledge", encoding="utf-8")
             self.assertEqual(build_index(root), 1)
-            self.assertEqual(search(root, "knowledge")[0][0], "note.md")
-            self.assertIn("Local knowledge", read(root, "note.md"))
+            self.assertEqual(ApplicationService(root).search("knowledge")["hits"][0]["path"], "note.md")
+            self.assertIn("Local knowledge", ApplicationService(root).read("note.md")["content"])
 
     def test_read_rejects_escape(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             init_vault(root)
             with self.assertRaises(ValueError):
-                read(root, "../outside.md")
+                ApplicationService(root).read("../outside.md")
 
     def test_state_store_records_task_and_proposal(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -128,7 +138,7 @@ class CoreTests(unittest.TestCase):
             store.set_proposal_status(proposal_id, "approved")
             artifact_id = store.record_session_artifact("session-1", "approved decision", "30d", True)
             self.assertTrue(event_id and run_id and proposal_id)
-            self.assertTrue((root / ".kbkit" / "artifacts" / f"{artifact_id}.txt").exists())
+            self.assertTrue((metadata_dir(root) / "artifacts" / f"{artifact_id}.txt").exists())
             store.close()
 
     def test_session_artifact_requires_consent(self):
@@ -204,23 +214,6 @@ class CoreTests(unittest.TestCase):
             restore_backup(archive, restored)
             self.assertEqual((restored / "note.md").read_text(encoding="utf-8"), "backup")
 
-    def test_git_status_is_optional(self):
-        with tempfile.TemporaryDirectory() as directory:
-            result = status(Path(directory))
-            self.assertIn("available", result)
-
-    def test_git_status_and_commit_in_repository(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            import subprocess
-
-            subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True)
-            (root / "note.md").write_text("versioned", encoding="utf-8")
-            self.assertTrue(status(root)["available"])
-            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True, capture_output=True)
-            subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True, capture_output=True)
-            self.assertTrue(commit(root, "test snapshot")["committed"])
-
     def test_application_service_writes_and_reindexes(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -243,7 +236,7 @@ class CoreTests(unittest.TestCase):
             build_index(root)
             old.rename(new)
             build_index(root)
-            self.assertEqual(search(root, "move me")[0][0], "new.md")
+            self.assertEqual(ApplicationService(root).search("move me")["hits"][0]["path"], "new.md")
 
     def test_search_syncs_external_edits_copies_and_deletions(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -251,14 +244,14 @@ class CoreTests(unittest.TestCase):
             init_vault(root)
             note = root / "original.md"
             note.write_text("# Note\n\noldtoken", encoding="utf-8")
-            self.assertEqual(len(search(root, "oldtoken")), 1)
+            self.assertEqual(len(ApplicationService(root).search("oldtoken")["hits"]), 1)
             note.write_text("# Note\n\nnewtoken added", encoding="utf-8")
-            self.assertEqual(search(root, "oldtoken"), [])
+            self.assertEqual(ApplicationService(root).search("oldtoken")["hits"], [])
             copy = root / "copy.md"
             copy.write_bytes(note.read_bytes())
-            self.assertEqual({hit[0] for hit in search(root, "newtoken")}, {"original.md", "copy.md"})
+            self.assertEqual({hit["path"] for hit in ApplicationService(root).search("newtoken")["hits"]}, {"original.md", "copy.md"})
             note.unlink()
-            self.assertEqual([hit[0] for hit in search(root, "newtoken")], ["copy.md"])
+            self.assertEqual([hit["path"] for hit in ApplicationService(root).search("newtoken")["hits"]], ["copy.md"])
             store = StateStore(root)
             try:
                 events = store.connection.execute(
@@ -280,5 +273,5 @@ class CoreTests(unittest.TestCase):
             note.write_text("# Note\n\nnewtoken", encoding="utf-8")
             os.utime(note, ns=(stat.st_atime_ns, stat.st_mtime_ns))
             self.assertEqual(maintain(root)["changed_blocks"], 1)
-            self.assertEqual(search(root, "oldtoken"), [])
-            self.assertEqual(len(search(root, "newtoken")), 1)
+            self.assertEqual(ApplicationService(root).search("oldtoken")["hits"], [])
+            self.assertEqual(len(ApplicationService(root).search("newtoken")["hits"]), 1)

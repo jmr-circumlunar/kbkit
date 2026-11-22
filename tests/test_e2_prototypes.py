@@ -7,11 +7,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from kbkit.prototype_index import FtsIndex, fts5_available
+from kbkit.prototype_index import FtsIndex, fts5_error
 from kbkit.prototype_markdown import parse_document, set_frontmatter_field
 from kbkit.prototype_mcp import handle
 from kbkit.prototype_lock import file_lock
-from kbkit.prototype_transaction import apply_with_journal, recover
+from kbkit.transaction import digest, recover_transaction
 
 
 def _hold_lock(path: str, ready, release):
@@ -32,7 +32,7 @@ from kbkit.application import ApplicationService
 
 class E2PrototypeTests(unittest.TestCase):
     def test_fts5_probe_and_search(self):
-        self.assertTrue(fts5_available())
+        self.assertIsNone(fts5_error())
         connection = sqlite3.connect(":memory:")
         try:
             index = FtsIndex(connection)
@@ -53,12 +53,12 @@ class E2PrototypeTests(unittest.TestCase):
             root = Path(directory)
             target = root / "note.md"
             journal = root / "txn.json"
-            target.write_bytes(b"before")
-            apply_with_journal(target, b"after", journal)
-            self.assertEqual(recover(journal), "applied")
-            target.write_bytes(b"external")
-            journal.write_text(json.dumps({"target": str(target), "before_hash": "x", "after_hash": "y", "state": "pending"}), encoding="utf-8")
-            self.assertEqual(recover(journal), "divergent")
+            record = {"target": str(target), "before_hash": digest(b"before"), "after_hash": digest(b"after"), "state": "pending"}
+            for content, expected in ((b"before", "pending"), (b"after", "applied"), (b"external", "divergent")):
+                target.write_bytes(content)
+                journal.write_text(json.dumps(record), encoding="utf-8")
+                self.assertEqual(recover_transaction(root, journal), expected)
+                self.assertEqual(target.read_bytes(), content)
 
     def test_mcp_contract_has_jsonrpc_error(self):
         self.assertEqual(handle({"jsonrpc": "2.0", "id": 1, "method": "initialize"})["result"]["serverInfo"]["name"], "kbkit")

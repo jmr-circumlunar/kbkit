@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .storage import metadata_dir
-from .profile import INACTIVE_STATES, Profile, load_profile
+from .profile import Profile, load_profile
 from .prototype_markdown import parse_document
 from .transaction import digest, write_atomic
 

@@ -14,10 +14,24 @@ from .storage import app_data_dir, metadata_dir
 from .transaction import write_atomic
 
 
+def init_vault(root: Path) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    profile = metadata_dir(root) / "profile.toml"
+    if not profile.exists():
+        try:
+            write_atomic(profile, f'vault_uuid = "{uuid.uuid4()}"\nschema_version = 1\n'.encode("utf-8"), exclusive=True)
+        except FileExistsError:
+            pass
+    return profile
+
+
 def vault_id(root: Path) -> str:
     profile = metadata_dir(root) / "profile.toml"
-    with profile.open("rb") as stream:
-        data = tomllib.load(stream)
+    try:
+        with profile.open("rb") as stream:
+            data = tomllib.load(stream)
+    except tomllib.TOMLDecodeError as error:
+        raise ValueError(f"invalid vault profile {profile}: {error}") from error
     try:
         return str(uuid.UUID(data["vault_uuid"]))
     except (KeyError, TypeError, AttributeError, ValueError) as exc:

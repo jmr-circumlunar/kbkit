@@ -11,7 +11,7 @@ import tempfile
 import tomllib
 import unittest
 from unittest.mock import patch
-from zipfile import BadZipFile, ZIP_STORED, ZipFile
+from zipfile import BadZipFile, ZIP_DEFLATED, ZIP_STORED, ZipFile
 
 from kbkit.application import ApplicationService
 from kbkit.backup import create_backup, restore_backup, verify_backup
@@ -103,6 +103,44 @@ class IntegrityRegressionTests(unittest.TestCase):
         with self.assertRaises(BadZipFile):
             restore_backup(damaged, dest)
         self.assertEqual(list(dest.iterdir()), [])
+
+    def test_invalid_deflate_is_reported_and_restore_remains_empty(self):
+        damaged = self.base / "deflate.zip"
+        with ZipFile(damaged, "w", compression=ZIP_DEFLATED) as bundle:
+            bundle.writestr("note.md", b"portable text " * 200)
+        data = bytearray(damaged.read_bytes())
+        data[30 + len("note.md")] = 0x07  # Invalid deflate block type.
+        damaged.write_bytes(data)
+        verified = self.run_cli("backup", "verify", damaged)
+        self.assertEqual(verified.returncode, 1)
+        self.assertNotIn(b"Traceback", verified.stderr)
+        self.assertEqual(json.loads(verified.stdout)["first_bad"], "note.md")
+        destination = self.base / "clean"
+        destination.mkdir()
+        restored = self.run_cli("backup", "restore", damaged, destination)
+        self.assertEqual(restored.returncode, 1)
+        self.assertNotIn(b"Traceback", restored.stderr)
+        self.assertEqual(list(destination.iterdir()), [])
+
+    def test_divergent_transaction_can_accept_reconciled_files(self):
+        original = self.note("note.md", b"before\n")
+        plan = plan_operations(self.vault, [{"operation": "append", "path": "note.md", "content": "proposed\n"}])
+        with self.assertRaisesRegex(RuntimeError, "fault injection"):
+            apply_plan(self.vault, plan, fail_after=0)
+        original.write_bytes(b"reconciled by the user\n")
+        options = (self.vault, "--transaction-id", plan["transaction_id"])
+        first = self.run_cli("recover", *options)
+        self.assertEqual(first.returncode, 1)
+        self.assertIn("divergent", json.loads(first.stdout).values())
+        archive = self.base / "reconciled.zip"
+        with self.assertRaisesRegex(ValueError, "divergent"):
+            create_backup(self.vault, archive)
+        resolved = self.run_cli("recover", *options, "--accept-current")
+        self.assertEqual(resolved.returncode, 0, resolved.stderr)
+        self.assertIn("resolved", json.loads(resolved.stdout).values())
+        self.assertEqual(original.read_bytes(), b"reconciled by the user\n")
+        create_backup(self.vault, archive)
+        self.assertTrue(verify_backup(archive)["ok"])
 
     def test_external_move_and_bad_journal_recovery(self):
         self.note("a.md", b"unchanged\n")

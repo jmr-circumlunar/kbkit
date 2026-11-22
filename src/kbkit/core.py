@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
 import sqlite3
 import uuid
 import json
 from collections import defaultdict
-from contextlib import closing
+from contextlib import ExitStack, closing
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,8 +21,8 @@ from .prototype_markdown import parse_document
 from .knowledge import KnowledgeVault
 from .selector import blocks as select_blocks, headings, markdown_path, source_lines
 from .code_sync import refresh_code
-from .transaction import write_atomic
-from .vault_profile import index_path
+from .transaction import digest
+from .vault_profile import index_path, init_vault
 
 
 @dataclass(frozen=True)
@@ -34,23 +33,6 @@ class Block:
     content: str
     line_start: int
     line_end: int
-
-
-def _hash(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
-def init_vault(root: Path) -> Path:
-    root.mkdir(parents=True, exist_ok=True)
-    profile = metadata_dir(root) / "profile.toml"
-    if profile.exists():
-        return profile
-    profile.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        write_atomic(profile, f'vault_uuid = "{uuid.uuid4()}"\nschema_version = 1\n'.encode("utf-8"), exclusive=True)
-    except FileExistsError:
-        pass
-    return profile
 
 
 def _blocks(relative: str, data: bytes) -> list[Block]:
@@ -73,30 +55,28 @@ def _document_metadata(data: bytes) -> dict:
     return metadata
 
 
-def _sync_index(root: Path, connection: sqlite3.Connection, state: StateStore, *, verify: bool) -> int:
+def _sync_index(root: Path, connection: sqlite3.Connection, record_event, *, verify: bool,
+                selected: tuple[str, ...] | None) -> int:
     connection.execute("CREATE TABLE IF NOT EXISTS documents(path TEXT PRIMARY KEY, content_hash TEXT NOT NULL, document_id TEXT, mtime_ns INTEGER, size INTEGER, lifecycle TEXT, metadata TEXT, change_token TEXT)")
     columns = {row[1] for row in connection.execute("PRAGMA table_info(documents)")}
-    if "document_id" not in columns:
-        connection.execute("ALTER TABLE documents ADD COLUMN document_id TEXT")
-    if "mtime_ns" not in columns:
-        connection.execute("ALTER TABLE documents ADD COLUMN mtime_ns INTEGER")
-    if "size" not in columns:
-        connection.execute("ALTER TABLE documents ADD COLUMN size INTEGER")
-    if "lifecycle" not in columns:
-        connection.execute("ALTER TABLE documents ADD COLUMN lifecycle TEXT")
-    if "metadata" not in columns:
-        connection.execute("ALTER TABLE documents ADD COLUMN metadata TEXT")
-    if "change_token" not in columns:
-        connection.execute("ALTER TABLE documents ADD COLUMN change_token TEXT")
+    for column, kind in {"document_id": "TEXT", "mtime_ns": "INTEGER", "size": "INTEGER",
+                         "lifecycle": "TEXT", "metadata": "TEXT", "change_token": "TEXT"}.items():
+        if column not in columns:
+            connection.execute(f"ALTER TABLE documents ADD COLUMN {column} {kind}")
+            selected = None
     index = FtsIndex(connection)
     count = 0
+    if index.rebuild_required:
+        selected = None
+    condition, arguments = document_scope(selected)
     documents = {
-        path: (content_hash, document_id, mtime_ns, size, lifecycle, fields_json, token)
-        for path, content_hash, document_id, mtime_ns, size, lifecycle, fields_json, token in connection.execute(
-            "SELECT path, content_hash, document_id, mtime_ns, size, lifecycle, metadata, change_token FROM documents"
+        path: (content_hash, document_id, mtime_ns, size, lifecycle, token)
+        for path, content_hash, document_id, mtime_ns, size, lifecycle, token in connection.execute(
+            "SELECT path, content_hash, document_id, mtime_ns, size, lifecycle, change_token FROM documents" + condition,
+            arguments,
         )
     }
-    paths = markdown_files(root)
+    paths = index_sources(root, selected)
     tokens = change_tokens(paths)
     missing = documents.keys() - paths.keys()
     missing_by_hash: dict[str, list[str]] = defaultdict(list)
@@ -107,22 +87,18 @@ def _sync_index(root: Path, connection: sqlite3.Connection, state: StateStore, *
         previous = documents.get(relative)
         metadata = (info.st_mtime_ns, info.st_size)
         token = tokens.get(relative)
-        if (not verify and not index.rebuild_required and token and previous and previous[5] is not None
-                and previous[2:4] == metadata and previous[6] == token):
+        if (not verify and not index.rebuild_required and token and previous and previous[4] is not None
+                and previous[2:4] == metadata and previous[5] == token):
             continue
         data = path.read_bytes()
-        content_hash = _hash(data)
+        content_hash = digest(data)
         if previous and previous[0] == content_hash:
-            if previous[2:4] != metadata or previous[5] is None or previous[6] != token:
+            if previous[2:4] != metadata or previous[4] is None or previous[5] != token:
                 fields = _document_metadata(data)
                 connection.execute("UPDATE documents SET mtime_ns = ?, size = ?, lifecycle = ?, metadata = ?, change_token = ? WHERE path = ?",
                                    (*metadata, fields.get("state", "active"), json.dumps(fields), token, relative))
             if index.rebuild_required:
-                for block in _blocks(relative, data):
-                    index.insert_block(block.path, block.block_id, block.content, commit=False,
-                                       heading=block.heading, title=block.heading[-1] if block.heading else Path(relative).stem,
-                                       line_start=block.line_start, line_end=block.line_end)
-                    count += 1
+                count += _insert_blocks(index, relative, data)
             continue
         document_id = previous[1] if previous else None
         if previous is None:
@@ -131,8 +107,9 @@ def _sync_index(root: Path, connection: sqlite3.Connection, state: StateStore, *
                 old_path = candidates[0]
                 document_id = documents[old_path][1]
                 moved_from.add(old_path)
-                state.record_event("vault", old_path, content_hash, None, "moved", commit=False)
-        state.record_event("vault", relative, previous[0] if previous else None, content_hash, "moved" if previous is None and document_id else content_hash, commit=False)
+                record_event("vault", old_path, content_hash, None, "moved")
+        record_event("vault", relative, previous[0] if previous else None, content_hash,
+                     "moved" if previous is None and document_id else content_hash)
         fields = _document_metadata(data)
         connection.execute("INSERT OR REPLACE INTO documents(path, content_hash, document_id, mtime_ns, size, lifecycle, metadata, change_token)"
                            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -140,17 +117,44 @@ def _sync_index(root: Path, connection: sqlite3.Connection, state: StateStore, *
                             fields.get("state", "active"), json.dumps(fields), token))
         if previous:
             index.delete_blocks(relative)
-        for block in _blocks(relative, data):
-            index.insert_block(block.path, block.block_id, block.content, commit=False,
-                                       heading=block.heading, title=block.heading[-1] if block.heading else Path(relative).stem,
-                                       line_start=block.line_start, line_end=block.line_end)
-            count += 1
+        count += _insert_blocks(index, relative, data)
     for relative in sorted(missing):
         if relative not in moved_from:
-            state.record_event("vault", relative, documents[relative][0], None, "deleted", commit=False)
+            record_event("vault", relative, documents[relative][0], None, "deleted")
         connection.execute("DELETE FROM documents WHERE path = ?", (relative,))
         index.delete_blocks(relative)
     return count
+
+
+def _insert_blocks(index: FtsIndex, relative: str, data: bytes) -> int:
+    blocks = _blocks(relative, data)
+    for block in blocks:
+        index.insert_block(block.path, block.block_id, block.content, commit=False,
+                           heading=block.heading, title=block.heading[-1] if block.heading else Path(relative).stem,
+                           line_start=block.line_start, line_end=block.line_end)
+    return len(blocks)
+
+
+def document_scope(selected: tuple[str, ...] | None, column: str = "path") -> tuple[str, tuple]:
+    if selected is None:
+        return "", ()
+    if not selected:
+        return " WHERE 0", ()
+    placeholders = ", ".join("?" for _ in selected)
+    return f" WHERE {column} IN ({placeholders})", selected
+
+
+def index_sources(root: Path, selected: tuple[str, ...] | None) -> dict:
+    if selected is None:
+        return markdown_files(root)
+    files = {}
+    for relative in selected:
+        target = markdown_path(root, relative, allow_missing=True)
+        try:
+            files[relative] = (target, target.stat())
+        except FileNotFoundError:
+            continue
+    return files
 
 
 def _index_is_damaged(path: Path) -> bool:
@@ -161,20 +165,32 @@ def _index_is_damaged(path: Path) -> bool:
         return getattr(error, "sqlite_errorcode", 0) & 255 in (sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB)
 
 
-def _build_index(root: Path, *, verify: bool = True) -> int:
+def _build_index(root: Path, *, verify: bool = True, selected: tuple[str, ...] | None = None) -> int:
     path = index_path(root, create=True)
+    if not path.is_file():
+        selected = None
     for attempt in range(2):
         try:
-            with closing(sqlite3.connect(path)) as connection:
+            with closing(sqlite3.connect(path)) as connection, ExitStack() as audit:
                 connection.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
-                with closing(StateStore(root)) as state, state.connection, connection:
+                state = None
+
+                def record_event(*fields):
+                    nonlocal state
+                    if state is None:
+                        state = audit.enter_context(closing(StateStore(root)))
+                        audit.enter_context(state.connection)
+                    state.record_event(*fields, commit=False)
+
+                with connection:
                     connection.execute("BEGIN IMMEDIATE")
-                    return _sync_index(root, connection, state, verify=verify)
+                    return _sync_index(root, connection, record_event, verify=verify, selected=selected)
         except sqlite3.DatabaseError as error:
             if attempt or getattr(error, "sqlite_errorcode", 0) & 255 not in (sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB):
                 raise
             if not _index_is_damaged(path):
                 raise
+        selected = None
         suffix = f".damaged-{uuid.uuid4().hex[:8]}"
         path.rename(path.with_suffix(suffix))
         for extension in ("-wal", "-shm", "-journal"):
@@ -190,21 +206,9 @@ def build_index(root: Path) -> int:
         return _build_index(root)
 
 
-def search_details(root: Path, query: str, include_inactive: bool = False) -> list[dict]:
-    from .retrieval import search_page
-
-    return search_page(root, query, include_inactive, limit=None, select="full")["hits"]
-
-
-def search(root: Path, query: str) -> list[tuple[str, str, str]]:
-    return [(hit["path"], hit["block_id"], hit["content"]) for hit in search_details(root, query)]
-
-
-def read(root: Path, relative_path: str) -> str:
-    return markdown_path(root, relative_path).read_text(encoding="utf-8-sig")
-
-
 def maintain(root: Path) -> dict:
+    from .consistency import check_consistency
+
     init_vault(root)
     lock_path = metadata_dir(root) / "maintenance.lock"
     with file_lock(lock_path):
@@ -214,6 +218,7 @@ def maintain(root: Path) -> dict:
             knowledge = KnowledgeVault(root)
             code_sync = refresh_code(knowledge)
             blocks = _build_index(root)
+            consistency = check_consistency(root)
             graph = build_graph(root)
             protected = set(knowledge.data["pages"]) | {entry["page"] for entry in knowledge.data["code"].values()}
             findings = lint(root, graph=graph, protected=protected)
@@ -224,9 +229,10 @@ def maintain(root: Path) -> dict:
                     state.create_proposal("low", finding["message"], finding["fix"])
             with closing(sqlite3.connect(index_path(root))) as connection:
                 indexed_blocks = FtsIndex(connection).count()
-            status = "partial" if any(row["status"] in {"conflicted", "unverified"} for row in code_sync) else "succeeded"
+            incomplete = not consistency["ok"] or any(row["status"] in {"conflicted", "unverified"} for row in code_sync)
+            status = "partial" if incomplete else "succeeded"
             report = {"run_id": run_id, "status": status, "blocks": indexed_blocks, "changed_blocks": blocks, "graph": graph, "findings": findings, "expired_proposals": expired, "proposals": state.proposal_page("pending", 1, 0)[0],
-                      "code_sync": code_sync, "knowledge": knowledge.statuses()}
+                      "consistency": consistency, "code_sync": code_sync, "knowledge": knowledge.statuses()}
             report_path = metadata_dir(root) / "reports" / f"{run_id}.json"
             report_path.parent.mkdir(parents=True, exist_ok=True)
             report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

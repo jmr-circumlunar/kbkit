@@ -11,7 +11,7 @@ from .application import ApplicationService
 from .paging import MAX_PAYLOAD_BYTES, json_size
 from .profile import QueryError
 from .selector import SelectorError
-from .transaction import TransactionError
+from .transaction import PendingTransactionError, TransactionError
 
 
 SUPPORTED_PROTOCOLS = ("2025-11-25", "2025-06-18")
@@ -28,7 +28,7 @@ def obj(properties, *required):
     return {"type": "object", "properties": properties, "required": list(required), "additionalProperties": False}
 
 
-SELECTOR = obj({"path": STRING, "heading_path": TEXT_FILTER, "block_id": STRING,
+SELECTOR = obj({"path": STRING, "heading_path": STRINGS, "block_id": STRING,
                 "line_range": {"anyOf": [STRING, LINES]}})
 OPERATIONS = {"type": "array", "minItems": 1, "maxItems": 50, "items": obj({
     "operation": {"type": "string", "enum": ["create", "append", "delete", "move", "rename", "set_prop"]},
@@ -49,8 +49,10 @@ TOOLS = {
     "kb_index": Tool("index", "Synchronize the derived index with Markdown content.", obj({})),
     "kb_search": Tool("search", "Search Markdown blocks with metadata filters and bounded results.", obj({
         **WINDOW, "query": STRING, "include_inactive": BOOLEAN, "include_excluded": BOOLEAN, "max_chars": INTEGER, "select": STRING,
-        "path": TEXT_FILTER, "kind": TEXT_FILTER, "state": TEXT_FILTER, "tags": TEXT_FILTER,
-        "symbols": TEXT_FILTER, "exclude": TEXT_FILTER, "budget_chars": INTEGER,
+        "path": TEXT_FILTER, "kind": TEXT_FILTER, "state": TEXT_FILTER,
+        "tags": {**TEXT_FILTER, "description": "A document must contain all requested tags."},
+        "symbols": {**TEXT_FILTER, "description": "A block must match all requested identifiers."},
+        "exclude": TEXT_FILTER, "budget_chars": INTEGER,
     })),
     "kb_read": Tool("read", "Read text by path, heading, block ID or source lines.", obj({
         "path": STRING, "heading": STRINGS, "block_id": STRING, "lines": LINES, "max_bytes": INTEGER,
@@ -65,9 +67,11 @@ TOOLS = {
     "kb_proposals": Tool("proposals", "List executable maintenance proposals and their statuses.", obj({"status": STRING, **WINDOW})),
     "kb_proposal_apply": Tool("apply_proposal", "Apply an approved low-risk proposal.", obj({"proposal_id": STRING}, "proposal_id")),
     "kb_write_plan": Tool("plan_operations", "Preview a batch of Markdown writes without changing the vault.",
-                          obj({"operations": OPERATIONS}, "operations")),
-    "kb_write_apply": Tool("apply_operations", "Apply a batch with an optional plan_hash from the preview.",
-                           obj({"operations": OPERATIONS, "plan_hash": STRING}, "operations")),
+                          obj({"operations": OPERATIONS, **WINDOW}, "operations")),
+    "kb_write_apply": Tool("apply_operations", "Apply a batch. Provide the preview plan_hash and reuse the same UUID request_id for safe retries.",
+                           obj({"operations": OPERATIONS, "plan_hash": STRING, "request_id": STRING}, "operations")),
+    "kb_write_status": Tool("write_status", "Check a transaction by its transaction ID or write request ID.",
+                            obj({"transaction_id": STRING}, "transaction_id")),
     "kb_restore": Tool("restore", "Restore a deleted note if its original path is still free.", obj({"entry_id": STRING}, "entry_id")),
 }
 
@@ -104,9 +108,22 @@ def _validate(value, schema, name):
         value.encode("utf-8")
 
 
+# Leave room for the JSON-RPC envelope and the escaped request ID.
+RESULT_BUDGET = MAX_PAYLOAD_BYTES - 2048
+
+
 def _result(payload, is_error=False):
-    return {"isError": is_error, "structuredContent": payload,
-            "content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))}]}
+    result = {"isError": is_error, "structuredContent": payload,
+              "content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))}]}
+    if json_size(result) > RESULT_BUDGET:
+        # Modern hosts retain the full result. Older hosts can request a
+        # shorter page or use the transaction ID for a mutating tool.
+        summary = {"hint": "See structuredContent or request a smaller max_bytes for paginated tools."}
+        for key in ("transaction_id", "run_id", "state", "status", "index_dirty", "next_offset"):
+            if key in payload:
+                summary[key] = payload[key]
+        result["content"][0]["text"] = json.dumps(summary, ensure_ascii=False, separators=(",", ":"))
+    return result
 
 
 def _failure(code, message, hint, *, retryable=False, details=None):
@@ -124,6 +141,8 @@ def _call(name, arguments, service):
     except (UnicodeError, ValueError) as exc:
         return _failure("KB_ARGUMENT_INVALID", exc, "Call tools/list and use the advertised inputSchema.")
     try:
+        if "max_bytes" in arguments and arguments["max_bytes"] <= MAX_PAYLOAD_BYTES:
+            arguments = {**arguments, "max_bytes": min(arguments["max_bytes"], RESULT_BUDGET - 1024)}
         payload = getattr(service, tool.method)(**arguments)
     except QueryError as exc:
         code = "KB_QUERY_ENUM_INVALID" if exc.allowed is not None else "KB_QUERY_INVALID"
@@ -131,6 +150,9 @@ def _call(name, arguments, service):
         return _failure(code, exc, hint, details={"field": exc.field, "allowed": (exc.allowed or [])[:200]})
     except SelectorError as exc:
         return _failure("KB_SELECTOR_INVALID", exc, "Verify the vault-relative path, then use kb_outline or kb_search to locate the selection.")
+    except PendingTransactionError as exc:
+        return _failure("KB_WRITE_PENDING", exc, "Inspect kb_write_status, then use kbc recover with the transaction ID.",
+                        retryable=True, details={"transaction_id": exc.transaction_id})
     except TransactionError as exc:
         return _failure("KB_WRITE_CONFLICT", exc, "Inspect the current note and use kb_write_plan again before retrying the write.")
     except FileNotFoundError as exc:
@@ -141,10 +163,14 @@ def _call(name, arguments, service):
         return _failure("KB_VALIDATION_FAILED", exc, "Check the field values against tools/list and inspect the vault with kb_status.")
     except (OSError, sqlite3.Error) as exc:
         return _failure("KB_IO_ERROR", exc, "Check vault and index permissions, then try kbc doctor --vault PATH.", retryable=True)
-    if json_size(payload) > MAX_PAYLOAD_BYTES:
-        return _failure("KB_RESPONSE_TOO_LARGE", "The result exceeds the response budget.",
-                        "Use a smaller limit or split the operation preview into smaller batches.")
-    return _result(payload)
+    result = _result(payload)
+    if json_size(result) <= RESULT_BUDGET:
+        return result
+    if name in {"kb_write_apply", "kb_write_status"}:
+        summary = {key: payload[key] for key in ("transaction_id", "state", "index_dirty") if key in payload}
+        return _result({**summary, "hint": "Use the CLI write status command to read the full receipt."})
+    return _failure("KB_RESPONSE_TOO_LARGE", "The result exceeds the response budget.",
+                    "Request a smaller max_bytes or limit for this tool.")
 
 
 def _protocol_error(request_id, code, message):
@@ -160,9 +186,12 @@ def handle(message: object, service: ApplicationService | None = None) -> dict |
     request_id = message["id"]
     if type(request_id) not in {int, str}:
         return _protocol_error(None, -32600, "invalid request ID")
+    if isinstance(request_id, int) and request_id.bit_length() > 256:
+        return _protocol_error(None, -32600, "request ID is too long")
     if isinstance(request_id, str):
         try:
-            request_id.encode("utf-8")
+            if len(request_id.encode("utf-8")) > 256:
+                return _protocol_error(None, -32600, "request ID is too long")
         except UnicodeEncodeError:
             return _protocol_error(None, -32600, "invalid request ID")
     params = message.get("params", {})

@@ -50,6 +50,93 @@ class AssessmentTests(unittest.TestCase):
         with self.profile.open("a", encoding="utf-8") as stream:
             stream.write("\n" + content + "\n")
 
+
+    def test_interrupted_write_blocks_overlap_and_request_retry_is_idempotent(self):
+        from kbkit import transaction
+
+        path = self.note("first.md", "first\n")
+        self.note("second.md", "second\n")
+        self.note("unrelated.md", "unrelated\n")
+        operations = [{"operation": "append", "path": name, "content": " once"}
+                      for name in ("first.md", "second.md")]
+        preview = self.ok("kb_write_plan", operations=operations)
+        options = {"operations": operations, "plan_hash": preview["plan_hash"], "request_id": preview["transaction_id"]}
+        recover = transaction._recover
+        with patch.object(transaction, "_recover", side_effect=lambda root, journal, record, _: recover(root, journal, record, 1)):
+            with self.assertRaisesRegex(RuntimeError, "fault injection"):
+                self.app.apply_operations(**options)
+        self.assertEqual(self.ok("kb_write_status", transaction_id=options["request_id"])["state"], "pending")
+        other = [{"operation": "append", "path": "second.md", "content": " blocked"}]
+        pending = self.request("kb_write_apply", operations=other)["structuredContent"]
+        self.assertEqual(pending["code"], "KB_WRITE_PENDING")
+        self.assertEqual(pending["details"]["transaction_id"], options["request_id"])
+        self.ok("kb_write_apply", operations=[{"operation": "append", "path": "unrelated.md", "content": " allowed"}])
+        first = self.ok("kb_write_apply", **options)
+        second = self.ok("kb_write_apply", **options)
+        self.assertEqual(first, second)
+        self.assertEqual(path.read_text().count("once"), 1)
+        self.assertEqual((self.root / "second.md").read_text().count("once"), 1)
+        self.assertFalse((metadata_dir(self.root) / "transactions" / options["request_id"]).exists())
+        reused = self.request("kb_write_apply", **{**options, "operations": other})["structuredContent"]
+        self.assertEqual(reused["code"], "KB_WRITE_CONFLICT")
+
+    def test_large_preview_pages_share_hash_and_mcp_frame_is_bounded(self):
+        from kbkit.paging import json_size
+
+        content = "# Scope\n\n" + ("some context " + "o" * 154 + "\n") * 13
+        operations = []
+        for i in range(50):
+            name = f"many{i}.md"
+            self.note(name, content)
+            operations.append({"operation": "append", "path": name, "content": "\n" + "r" * 430})
+        offset = 0
+        fingerprints = set()
+        paths = []
+        while offset is not None:
+            preview = self.ok("kb_write_plan", operations=operations, offset=offset, max_bytes=24_000)
+            self.assertEqual(preview["total"], 50)
+            fingerprints.add(preview["plan_hash"])
+            paths.extend(preview["changes"])
+            offset = preview["next_offset"]
+        self.assertEqual(len(fingerprints), 1)
+        self.assertEqual(paths, [op["path"] for op in operations])
+        self.note("wide.md", "# Wide\n" + ("a" * 300 + "\n") * 250)
+        response = handle({"jsonrpc": "2.0", "id": "\x01" * 256, "method": "tools/call",
+                           "params": {"name": "kb_read", "arguments": {
+                               "path": "wide.md", "lines": [1, 251], "max_bytes": 60_000
+                           }}}, self.app)
+        self.assertLessEqual(json_size(response), 60_000)
+        payload = response["result"]["structuredContent"]
+        self.assertTrue(payload["truncated"])
+        self.assertTrue(payload["next_lines"])
+        self.assertEqual(json.loads(response["result"]["content"][0]["text"])["hint"],
+                         "See structuredContent or request a smaller max_bytes for paginated tools.")
+
+    def test_scoped_index_refresh_and_config_diagnostics(self):
+        unrelated = self.note("elsewhere.md", "distinct old token\n")
+        self.note("drafts/keep/note.md", "# Project marker\n")
+        self.note("drafts/hide.md", "# Project marker\n")
+        self.configure('[unknown_section]\na = 1\n[search]\nallow = ["drafts/keep", "drafts/typo"]\n'
+                       '[search.exclude]\nprefixes = ["drafts"]\n[lint]\ndisable = ["FM-STAT"]')
+        self.app.index()
+        path_read = Path.read_bytes
+
+        def read_bytes(path):
+            self.assertNotEqual(path, unrelated)
+            return path_read(path)
+
+        with patch.object(Path, "read_bytes", read_bytes):
+            result = self.ok("kb_write_apply", operations=[{"operation": "rename", "path": "drafts/keep/note.md",
+                                                           "destination": "drafts/keep/new.md"}])
+            self.assertFalse(result["index_dirty"])
+        status = self.ok("kb_status")
+        self.assertEqual(status["excluded_documents"], 1)
+        self.assertIn("Unknown profile key: unknown_section", status["config_warnings"])
+        self.assertIn("Unknown lint rule: FM-STAT", status["config_warnings"])
+        self.assertIn("Path prefix matched no indexed Markdown: drafts/typo", status["config_warnings"])
+        self.assertEqual([hit["path"] for hit in self.ok("kb_search", query="Project marker")["hits"]],
+                         ["drafts/keep/new.md"])
+
     def test_precise_selectors_and_preview_token(self):
         path = self.note("guide.md", "\ufeff# Parent\r\nfirst\r\n## Child\r\nsecond\r\n# Other\r\nthird\r\n")
         selectors = [
