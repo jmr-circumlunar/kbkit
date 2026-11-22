@@ -54,6 +54,7 @@ class IntegrityRegressionTests(unittest.TestCase):
         note = self.note("案内/État.md", b"# Source\r\n")
         asset = self.note("graphics/依据.png", b"fixture")
         self.note(".obsidian/app.json", b"{}")
+        self.note(".git", b"gitdir: elsewhere")
         self.note(".obsidian/plugins/sample/data.json", b"private plugin state")
         KnowledgeVault(self.vault).review("案内/État.md", [])
         configure(self.vault, "fixture", "0 2 * * *", enabled=True)
@@ -67,6 +68,7 @@ class IntegrityRegressionTests(unittest.TestCase):
         self.assertEqual((destination / "案内/État.md").read_bytes(), note.read_bytes())
         self.assertEqual((destination / "graphics/依据.png").read_bytes(), asset.read_bytes())
         self.assertFalse((destination / ".obsidian/plugins").exists())
+        self.assertFalse((destination / ".git").exists())
         self.assertIn("Source", KnowledgeVault(destination).history("案内/État.md", 1)["content"])
         self.assertTrue(load(destination)["enabled"])
         ApplicationService(destination).index()
@@ -101,6 +103,9 @@ class IntegrityRegressionTests(unittest.TestCase):
         plan = plan_operations(self.vault, [{"operation":"append", "path":"a.md", "content":"applied\n"}])
         with self.assertRaises(RuntimeError):
             apply_plan(self.vault, plan, fail_after=0)
+        with self.assertRaisesRegex(ValueError, "pending"):
+            create_backup(self.vault, self.base / "pending.zip")
+        self.assertFalse((self.base / "pending.zip").exists())
         journals = metadata_dir(self.vault) / "transactions"
         (journals / "000-bad.json").write_bytes(b'{"incomplete"')
         moved = self.base / "moved"

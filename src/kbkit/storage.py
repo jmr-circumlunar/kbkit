@@ -81,6 +81,8 @@ def vault_files(root: Path):
             dirs[:] = [name for name in dirs if name == "snippets"]
             files = [name for name in files if not name.startswith("workspace")]
         for name in sorted(files):
+            if name.casefold() in {".git", ".kbkit", ".ds_store", "thumbs.db"}:
+                continue
             path = location / name
             if not path.is_symlink() and path.is_file():
                 yield path

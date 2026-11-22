@@ -1,6 +1,7 @@
 """Archive a vault and publish a restore only after validating its contents."""
 
 from contextlib import closing
+import json
 import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import shutil
@@ -24,8 +25,15 @@ def create_backup(root: Path, destination: Path) -> dict:
     state.mkdir(parents=True, exist_ok=True)
     names = []
     with file_lock(state / "maintenance.lock"), file_lock(state / "write.lock"):
+        for journal in sorted((state / "transactions").glob("*.json")):
+            try:
+                settled = json.loads(journal.read_bytes()).get("state") == "applied"
+            except (ValueError, AttributeError):
+                settled = False
+            if not settled:
+                raise ValueError(f"resolve the pending or damaged transaction before backup: {journal.name}")
         sources = [(path, path.relative_to(root).as_posix()) for path in vault_files(root)
-                   if path != state and state not in path.parents]
+                   if path != state and state not in path.parents and not path.name.startswith(".kbkit-")]
         for name in ("profile.toml", "knowledge.json", "automation.json"):
             sources.append((state / name, f".kbkit/{name}"))
         for name in ("history", "trash", "reports", "artifacts"):
