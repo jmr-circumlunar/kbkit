@@ -18,7 +18,7 @@ Skill 是给 Agent 的使用说明和操作约束，内容包括：
 
 Skill 不实现业务逻辑，也不保存 vault 状态。它可以作为仓库内的文本资源由 Agent 加载，也可以由集成方复制到自己的 Skill 目录。
 
-首发提供五个 Skill：`kb-onboard`、`kb-query`、`kb-author`、`kb-maintain`、`kb-ingest`，位于仓库的 `skills/` 目录。每个 Skill 都标明适用的 kbkit 版本和接口版本，Agent 可以直接读取对应的 `SKILL.md`。
+首次接入使用 [kb-install](../../skills/kb-install/SKILL.md)。安装后可使用 `kb-onboard`、`kb-query`、`kb-author`、`kb-maintain` 和 `kb-ingest`。每个 Skill 都标明接口版本，Agent 可直接读取对应的 `SKILL.md`。
 
 ### MCP Server
 
@@ -51,15 +51,12 @@ Windows Task Scheduler 负责定时唤起命令，kbkit 负责读取任务定义
 
 ## 用户安装和 Agent 加载流程
 
-1. 用户只需要让 Agent 获取仓库地址，或在 Agent 中加载仓库的 Skill 目录。
-2. Agent 询问本地 Python、目标 vault、是否创建目录、是否启用 Git 和自动化等必要信息。
-3. Agent 自动检查环境，创建或复用虚拟环境，安装本地仓库，并调用 `doctor`。
-4. Agent 向用户展示拟使用的路径，并依据现有库情况说明将创建的配置。
-5. 用户确认后，Agent 调用 `python -m kbkit init <vault>` 初始化或注册。
-6. Agent 为当前宿主生成 MCP 配置或使用宿主提供的动态 MCP 注册能力。
-7. Agent 运行一次 search、read、status 验证链路，再向用户报告结果。
+1. 用户把 [README 的安装指令](../../README.md#复制一句话给-agent) 交给当前项目里的 Agent，也可先用 Skills CLI 加载 `kb-install`。
+2. Agent 检查 Git 和 Python，确认涉及已有库或调度的用户选择，构建本地 zipapp 并运行 `doctor`。
+3. Agent 调用 `setup` 注册 vault、建立索引，为 Codex 或 Claude Code 生成项目级配置。其他支持 stdio 的宿主可挂接 MCP 并自行加载项目规则。
+4. Agent 验证 search、read 和 status。宿主完成项目与 Hook 信任后，在新会话检查工具发现和查询顺序。
 
-用户只需要决定目标路径、知识库范式、是否启用 Git、是否允许写入、自动化频率和是否允许模型辅助。安装、诊断、配置生成和验证由 Agent 完成。
+项目规则要求在回答项目知识问题时先用 `kb_search`，再用 `kb_read` 核对原文和来源。这个规则保存在 `AGENTS.md` 或 `CLAUDE.md`。SessionStart 用 `additionalContext` 加载同一规则，加上明示授权的一篇库内 Markdown 路由笔记（最多 3000 字符）。会话内按需检索最新条目。这个 Hook 负责加载会话上下文，项目规则负责引导 Agent 选择查询工具。
 
 MCP 配置的最小形态如下，具体字段名由宿主决定：
 

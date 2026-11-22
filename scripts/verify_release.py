@@ -61,7 +61,7 @@ from kbkit.onboarding import setup
 from kbkit.skills import list_skills
 vault = Path(sys.argv[1])
 result = setup(vault, vault.parent / 'offline-project', 'codex', None)
-if not result['indexed_blocks'] or len(list_skills()) != 5:
+if not result['indexed_blocks'] or "kb-install" not in {skill["name"] for skill in list_skills()}:
     raise RuntimeError('starter notes or bundled skills are missing')
 app = ApplicationService(vault)
 app.initialize()
@@ -169,7 +169,7 @@ def verify(url: str, branch: str | None, expected_sha: str | None, evidence: dic
                     f"unexpected retrieval results for {query}")
         checks["retrieval_golden"] = "passed"
         skills = {item.parent.name for item in (clone / "skills").glob("*/SKILL.md")}
-        require({"kb-onboard", "kb-query", "kb-author", "kb-maintain", "kb-ingest"} <= skills, "missing Skill files")
+        require({"kb-install", "kb-onboard", "kb-query", "kb-author", "kb-maintain", "kb-ingest"} <= skills, "missing Skill files")
         evidence["skill_files"] = sorted(skills)
 
         manual = vault / "manual.md"
@@ -245,8 +245,16 @@ def verify(url: str, branch: str | None, expected_sha: str | None, evidence: dic
         bundled = json.loads(run(root, [python, str(packages[0]), "setup", str(root / "zip-vault"),
                                        "--project", str(root / "zip-project"), "--host", "claude"], env).stdout)
         require(bundled["indexed_blocks"] > 0 and len(bundled["files"]) >= 8, "zipapp did not bundle starter or skills")
+        require((root / "zip-project" / ".claude" / "skills" / "kb-install" / "SKILL.md").is_file(),
+                "zipapp did not bundle kb-install")
         command = json.loads((root / "zip-project" / ".mcp.json").read_bytes())["mcpServers"]["kbkit"]
         require(command["args"][0] == str(packages[0].resolve()), "zipapp setup points to an installed module instead of itself")
+        explicit_note = root / "zip-vault" / "routing.md"
+        explicit_note.write_text("# Explicit route\n", encoding="utf-8")
+        run(root, [python, str(packages[0]), "setup", str(root / "zip-vault"), "--project", str(root / "zip-project"),
+                   "--host", "claude", "--context-note", explicit_note.name], env)
+        hooks = json.loads((root / "zip-project" / ".claude" / "settings.json").read_bytes())["hooks"]["SessionStart"]
+        require(len(hooks) == 1, "zipapp reconfiguration duplicated the SessionStart hook")
         checks["zipapp"] = "passed"
 
 

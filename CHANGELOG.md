@@ -3,7 +3,8 @@
 ## 未发布
 
 - 提供随 Git、wheel 和 zipapp 分发的示例知识库，支持初始化、检索、写入、备份、恢复与 Agent 项目配置。
-- Codex 和 Claude Code 的项目配置包含五个 Skill、MCP 和 UTF-8 启动上下文。已有文件和同名自定义 Skill 可继续使用。
+- 新增 `kb-install`，可从 Git 交给 Agent 自动接入当前项目。
+- Codex 和 Claude Code 的项目配置包含六个 Skill、MCP 和 UTF-8 启动上下文。Codex 清空会话或分叉时也刷新查库上下文。
 - 恢复 ZIP 前完整暂存，拒绝覆盖非空目录。外置状态可随原库搬迁，损坏日志独立报告。
 - 校验文档和搜索索引的一致性，保留损坏的 SQLite 索引文件后重建。检索利用文件变更记录，维护仍校验内容哈希。
 - 显式开放历史范围、可选严格状态闸门和来源检查范围。增加 macOS Apple Silicon 和 Intel 验收。

@@ -4,6 +4,18 @@ kbkit 是一个可从 Git 使用的本地 Markdown 知识库。仓库附带可�
 
 从 `main` 安装当前开发版。准备 Python 3.11–3.13 和 SQLite FTS5。
 
+## 复制一句话给 Agent
+
+> 请从 https://github.com/jmr-circumlunar/kbkit 的 main 读取 `skills/kb-install/SKILL.md`，按它安装 kbkit，为当前项目接入知识库并验收；接入已有库时询问路径，启用定时维护前确认频率、时区和来源范围。
+
+在 Windows、macOS 或 Linux 的执行环境中打开项目，再把这句话交给 Agent。iPhone 上可在 ChatGPT 的 Codex（或 Remote）里打开已配对的 Mac 或 Windows 项目，发送同一句话。组件、知识库和维护任务都在执行主机上。[Codex 手机端连接说明](https://learn.chatgpt.com/docs/remote-connections#before-you-set-up-mobile-access)
+
+使用 Skills CLI 的项目也可运行下列命令，再让 Agent 执行 [kb-install](skills/kb-install/SKILL.md)。Claude Code 使用 `-a claude-code`。
+
+```sh
+npx skills add jmr-circumlunar/kbkit --skill kb-install -a codex -y
+```
+
 ## 安装并打开示例库
 
 macOS 或 Linux
@@ -35,13 +47,15 @@ python -m venv .venv
 
 `kbc setup <vault> --project <project> --host codex` 会初始化并索引知识库，为指定项目生成 MCP、Skill、常驻查询规则和 SessionStart Hook。将宿主改成 claude 可配置 Claude Code。Agent 启动时可读取明确授权的一篇路由笔记，配置时用 `--context-note` 指定库内路径。示例库默认采用自己的路由笔记。需要手动挂接 MCP 时，执行 `kbc mcp stdio`，并设置 `KBKIT_VAULT` 为知识库绝对路径。
 
-进入已配置的项目并开启新会话。询问「怎么备份知识库」，可检查 Agent 是否先使用 `kb_search`，再使用 `kb_read` 验证来源。宿主自己处理项目和 Hook 信任。
+进入已配置的项目并开启新会话。Codex 读取 `AGENTS.md`，Claude Code 读取 `CLAUDE.md`。涉及项目方法、业务规则、模型、决策或历史时，按规则先调用 `kb_search`，再调用 `kb_read` 核对并引用原文。实现事实以当前代码为准。
+
+通过宿主的项目和 Hook 信任后，SessionStart 用 `additionalContext` 加入同一条查库规则，以及配置时授权的一篇路由笔记（最多 3000 字符）。工具调用顺序由 Agent 按项目规则执行。可以在新会话问「怎么备份知识库」，查看实际工具调用及来源。
 
 ## 使用和维护
 
 - `kbc search <vault> <query> --json` 搜索知识。大文档可用 `kb_outline` 和 `kb_read` 定向读取。显式查默认排除区时，提供路径并启用历史范围。
 - `kbc write plan <vault> <operations.json>` 预览写入。`kbc write apply <vault> <operations.json> --plan-hash <hash>` 应用同一个计划。Agent 对应调用 `kb_write_plan` 和 `kb_write_apply`。
-- `kbc task run <vault>` 手动维护。需定期执行时，由使用者在对应 Agent 宿主保存时间和来源范围。定时运行写出报告供回查。
+- `kbc task run <vault>` 手动维护。启用定时维护时，Agent 确认一次频率、时区和来源范围，在对应宿主创建可修改的任务。例行安全变更直接执行并写报告。
 - `kbc backup create <vault> <archive>` 备份，`kbc backup verify <archive>` 校验，`kbc backup restore <archive> <destination>` 恢复到新目录或空目录。恢复件与原库并存时，给恢复件注册独立身份。
 - 已启用外置元数据的知识库搬迁后，用 `kbc add <new> --identity moved --from <old>` 保留其身份。
 

@@ -164,11 +164,12 @@ class IntegrityRegressionTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(guide.read_text(encoding="utf-8").count("<!-- kbkit: begin -->"), 1)
         self.assertIn("Existing project rule", guide.read_text(encoding="utf-8"))
-        self.assertEqual(len(list((project / ".agents" / "skills").glob("*/SKILL.md"))), 5)
+        self.assertTrue((project / ".agents" / "skills" / "kb-install" / "SKILL.md").is_file())
         config = tomllib.loads((project / ".codex" / "config.toml").read_text(encoding="utf-8"))
         self.assertEqual(config["mcp_servers"]["kbkit"]["env"]["KBKIT_VAULT"], str(root))
         hooks = json.loads((project / ".codex" / "hooks.json").read_bytes())["hooks"]["SessionStart"]
         self.assertEqual(len(hooks), 1)
+        self.assertEqual(hooks[0]["matcher"], "startup|resume|clear|compact|fork")
         hook = self.run_cli("context", root, "--note", "00-索引/工作空间上下文.md")
         if os.name == "nt":
             native = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-File",
@@ -186,6 +187,17 @@ class IntegrityRegressionTests(unittest.TestCase):
         applied = self.run_cli("write", "apply", root, "-", "--plan-hash", plan_hash, stdin=payload)
         self.assertEqual(applied.returncode, 0, applied.stderr)
         self.assertEqual((root / "first.md").read_bytes(), b"# New\nstandalone-write")
+
+        hook_file = project / ".codex" / "hooks.json"
+        hooks[0]["matcher"] = "startup|resume|compact"
+        hook_file.write_text(json.dumps({"hooks": {"SessionStart": hooks}}), encoding="utf-8")
+        self.assertEqual(self.run_cli("setup", root, "--project", project, "--host", "codex",
+                                      "--context-note", "first.md").returncode, 0)
+        updated = json.loads(hook_file.read_bytes())["hooks"]["SessionStart"]
+        self.assertEqual(len(updated), 1)
+        self.assertEqual(updated[0]["matcher"], "startup|resume|clear|compact|fork")
+        note_hook = self.run_cli("context", root, "--note", "first.md")
+        self.assertIn("standalone-write", json.loads(note_hook.stdout)["hookSpecificOutput"]["additionalContext"])
 
     def test_quick_search_detects_edit_preserving_size_and_mtime(self):
         note = self.note("source.md", b"# Before markerabc\n")

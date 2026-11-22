@@ -98,6 +98,7 @@ def _host_files(project: Path, vault: Path, host: str, note: str | None) -> dict
     hook = _load_json(hooks_file)
     groups = hook.setdefault("hooks", {}).setdefault("SessionStart", [])
     arguments = [executable, *runtime, "context", str(vault)]
+    context_command = shlex.join(arguments)
     if note:
         arguments += ["--note", note]
     if os.name == "nt":
@@ -108,13 +109,22 @@ def _host_files(project: Path, vault: Path, host: str, note: str | None) -> dict
         command = subprocess.list2cmdline(["powershell.exe", "-NoProfile", "-NonInteractive", "-File", str(launcher)])
     else:
         command = shlex.join(arguments)
-    existing_hook = next((entry for group in groups for entry in group.get("hooks", [])
-                          if entry.get("command") == command or " -m kbkit context " in entry.get("command", "")), None)
-    if existing_hook is None:
-        matcher = "startup|resume|compact" if host == "codex" else "startup|resume|clear|compact"
+    def is_kbkit_hook(entry: dict) -> bool:
+        previous = entry.get("command", "")
+        return previous == command or (os.name != "nt" and
+                                       (previous == context_command or previous.startswith(context_command + " --note ")))
+
+    existing = next(((group, entry) for group in groups for entry in group.get("hooks", [])
+                     if is_kbkit_hook(entry)), None)
+    previous_matcher = "startup|resume|compact"
+    matcher = "startup|resume|clear|compact" + ("|fork" if host == "codex" else "")
+    if existing is None:
         groups.append({"matcher": matcher, "hooks": [{"type": "command", "command": command}]})
     else:
-        existing_hook["command"] = command
+        group, entry = existing
+        entry["command"] = command
+        if host == "codex" and group["hooks"] == [entry] and group.get("matcher") == previous_matcher:
+            group["matcher"] = matcher
     files[hooks_file] = _json_bytes(hook)
     guide = project / ("AGENTS.md" if host == "codex" else "CLAUDE.md")
     files[guide] = _routing_file(guide).encode("utf-8")

@@ -15,7 +15,8 @@ class SkillTests(unittest.TestCase):
             self.assertEqual(skills[0]["name"], "kb-query")
             self.assertIn("name: kb-query", skills[0]["content"])
 
-    def test_builtin_skills_include_file_ingestion(self):
+    def test_builtin_skills_include_installation_and_ingestion(self):
         names = {item["name"]: item["api_version"] for item in list_skills(Path(__file__).parents[1] / "skills")}
+        self.assertIn("kb-install", names)
         self.assertIn("kb-ingest", names)
         self.assertEqual(set(names.values()), {"v1"})
