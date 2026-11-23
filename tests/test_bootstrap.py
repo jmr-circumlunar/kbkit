@@ -7,7 +7,7 @@ from kbkit.cli import build_parser
 
 class BootstrapTests(unittest.TestCase):
     def test_version_is_defined(self):
-        self.assertEqual(__version__, "0.1.0")
+        self.assertEqual(__version__, "1.0.0")
 
     def test_cli_parser_accepts_doctor(self):
         args = build_parser().parse_args(["doctor"])

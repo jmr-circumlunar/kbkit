@@ -25,7 +25,7 @@ from .onboarding import session_context, setup
 from .profile import load_profile
 from .prototype_index import fts5_error
 from .prototype_lock import file_lock
-from .prototype_mcp import handle
+from .prototype_mcp import OUTPUT_MODES, handle
 from .registry import VaultRegistry
 from .state import StateStore
 from .storage import metadata_dir
@@ -173,6 +173,10 @@ def _doctor(root: Path | None) -> int:
 
 
 def _stdio() -> int:
+    output = os.environ.get("KBKIT_MCP_OUTPUT", "text")
+    if output not in OUTPUT_MODES:
+        print("KBKIT_MCP_OUTPUT must be text or structured", file=sys.stderr)
+        return 1
     vault = os.environ.get("KBKIT_VAULT")
     service = ApplicationService(Path(vault)) if vault else None
     for line in sys.stdin.buffer:
@@ -183,7 +187,7 @@ def _stdio() -> int:
         except (ValueError, RecursionError):
             response = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "invalid JSON"}}
         else:
-            response = handle(message, service)
+            response = handle(message, service, output=output)
         if response is not None:
             sys.stdout.buffer.write((json.dumps(response, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8"))
             sys.stdout.buffer.flush()

@@ -25,6 +25,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE_DOCS = [ROOT / "README.md", ROOT / "docs" / "architecture" / "INTERFACES.md",
                ROOT / "docs" / "architecture" / "TRANSACTION_PROTOCOL.md",
                *sorted((ROOT / "skills").glob("*/SKILL.md"))]
+ACTIVE_DESIGN_DOCS = sorted((ROOT / "docs" / "architecture").glob("*.md")) + sorted((ROOT / "docs" / "product").glob("*.md"))
+RETIRED_TRANSACTION_STATES = re.compile(r"\b(?:rolled_back|partially_applied|completed_with_index_dirty)\b")
 TOOL_NAME = re.compile(r"\bkb_[a-z][a-z_]*\b")
 CLI = re.compile(r"(?<![-\w])(?:-m\s+kbkit|\bkbc)\s+(?!-)([a-z][a-z-]*)(?:[ \t]+([a-z][a-z-]*))?")
 IMPORT = re.compile(r"\bfrom kbkit import ([\w, ]+)")
@@ -61,7 +63,7 @@ def contract_samples():
 
             def call(name, **arguments):
                 return handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                               "params": {"name": name, "arguments": arguments}}, service)["result"]
+                               "params": {"name": name, "arguments": arguments}}, service, output="structured")["result"]
 
             write = [{"operation": "append", "selector": {"path": "sample.md", "heading_path": ["Heading"]},
                       "content": "\nNew evidence\n"}]
@@ -147,6 +149,10 @@ def check(sources=SOURCE_DOCS) -> list[str]:
     all_fields |= set(instances(payloads["kb_write_apply"], "state"))
     all_fields |= profile.keys() | schemas.keys() | set(OPERATIONS["items"]["properties"]["operation"]["enum"])
     issues = []
+    for source in ACTIVE_DESIGN_DOCS:
+        retired = set(RETIRED_TRANSACTION_STATES.findall(source.read_text(encoding="utf-8")))
+        for state in sorted(retired):
+            issues.append(f"{source.relative_to(ROOT)}: retired transaction state {state}; see TRANSACTION_PROTOCOL.md")
     for source in sources:
         text = source.read_text(encoding="utf-8")
         domain = source.relative_to(ROOT) if source.is_relative_to(ROOT) else source

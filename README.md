@@ -2,7 +2,7 @@
 
 kbkit 是一个可从 Git 使用的本地 Markdown 知识库。仓库附带可读、可索引的示例库，以及 CLI、stdio MCP、Agent Skill 和备份与恢复。核心无需模型或第三方 Python 运行时依赖。
 
-从 `main` 安装当前开发版。准备 Python 3.11–3.13 和 SQLite FTS5。
+首个稳定版本为 [v1.0.0](https://github.com/jmr-circumlunar/kbkit/tree/v1.0.0)。也可从 `main` 安装当前开发版。准备 Python 3.11–3.13 和 SQLite FTS5。
 
 ## 复制一句话给 Agent
 
@@ -21,7 +21,7 @@ npx skills add jmr-circumlunar/kbkit --skill kb-install -a codex -y
 macOS 或 Linux
 
 ```sh
-git clone https://github.com/jmr-circumlunar/kbkit.git
+git clone --branch v1.0.0 https://github.com/jmr-circumlunar/kbkit.git
 cd kbkit
 python3 -m venv .venv
 ./.venv/bin/python -m pip install --no-deps .
@@ -32,7 +32,7 @@ python3 -m venv .venv
 Windows PowerShell
 
 ```powershell
-git clone https://github.com/jmr-circumlunar/kbkit.git
+git clone --branch v1.0.0 https://github.com/jmr-circumlunar/kbkit.git
 cd kbkit
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --no-deps .

@@ -16,7 +16,12 @@ CLI 和 stdio MCP 共用应用服务。Agent 应以 `tools/list` 的输入 schem
 
 ## MCP
 
-stdio 使用 UTF-8。服务协商 `2025-11-25` 或 `2025-06-18`，工具结果同时提供 JSON 文本和 `structuredContent`。常规小响应同时携带这两种表示，用于兼容旧宿主。较大的响应会将兼容文本压缩为摘要，完整结构化数据继续受 JSON-RPC 帧预算约束。工具执行失败时，`isError` 为 `true`，结构化结果含错误码、原因和处理建议。格式错误的 JSON-RPC 请求及未知工具返回协议层错误。
+stdio 使用 UTF-8。服务协商 `2025-11-25` 或 `2025-06-18`。每条工具响应只携带一份完整结果。
+
+- 默认通过 MCP `content` 的文本块发送 JSON。Codex、Claude Code 和其他读取文本块的宿主可继续使用默认配置。
+- 直接通过 MCP 获取对象的客户端，可给服务器进程设置 `KBKIT_MCP_OUTPUT=structured`。完整对象位于 `structuredContent`，`content` 为空数组。两种模式的业务字段一致。
+- 两种模式均执行 60,000 字节的 JSON-RPC 整帧预算。文本模式还为 JSON 转义留出空间，长结果沿用分页或续读。
+- 工具执行失败时，`isError` 为 `true`，结果含错误码、原因和处理建议。格式错误的请求及未知工具返回协议层错误。
 
 | 用途 | 工具 |
 | --- | --- |

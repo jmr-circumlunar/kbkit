@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kbkit"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Local, agent-oriented Markdown knowledge-base toolkit"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -16,6 +16,9 @@ kbc = "kbkit.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
+
+[tool.setuptools.dynamic]
+version = {attr = "kbkit.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import ast
 import hashlib
 import json
 import os
@@ -81,7 +80,7 @@ def verify(url: str, branch: str | None, expected_sha: str | None, evidence: dic
         root = Path(directory)
         clone, vault, repo = (root / name for name in ("clone", "vault", "code"))
         env = os.environ.copy()
-        for name in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "KBKIT_VAULT", "KBKIT_HOME"):
+        for name in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "KBKIT_VAULT", "KBKIT_HOME", "KBKIT_MCP_OUTPUT"):
             env.pop(name, None)
         env.update({
             "PYTHONIOENCODING": "utf-8", "PYTHONNOUSERSITE": "1", "GIT_TERMINAL_PROMPT": "0",
@@ -125,7 +124,7 @@ def verify(url: str, branch: str | None, expected_sha: str | None, evidence: dic
         checks["init"] = "passed"
         env["KBKIT_VAULT"] = str(vault)
 
-        def mcp(method: str, **params) -> dict:
+        def mcp(method: str, *, output: str = "text", **params) -> dict:
             request = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
             messages = [request]
             if method != "initialize":
@@ -138,7 +137,8 @@ def verify(url: str, branch: str | None, expected_sha: str | None, evidence: dic
                     request,
                 ]
             payload = "\n".join(json.dumps(message, ensure_ascii=False) for message in messages) + "\n"
-            result = run(root, [python, "-m", "kbkit", "mcp", "stdio"], env, payload=payload)
+            result = run(root, [python, "-m", "kbkit", "mcp", "stdio"], {**env, "KBKIT_MCP_OUTPUT": output}, payload=payload)
+            require(all(len(line.encode("utf-8")) <= 60_000 for line in result.stdout.splitlines()), "MCP frame exceeds budget")
             require(not result.stderr, "MCP emitted stderr during a successful probe")
             responses = [json.loads(line) for line in result.stdout.splitlines()]
             require([response["id"] for response in responses] == ([1] if method == "initialize" else [0, 1]),
@@ -147,11 +147,20 @@ def verify(url: str, branch: str | None, expected_sha: str | None, evidence: dic
 
         def call(name: str, **arguments) -> dict:
             result = mcp("tools/call", name=name, arguments=arguments)
-            if "structuredContent" in result:
-                return result["structuredContent"]
-            return ast.literal_eval(result["content"][0]["text"])
+            require("structuredContent" not in result, "default MCP response duplicated its payload")
+            return json.loads(result["content"][0]["text"])
 
-        evidence["mcp_protocol"] = mcp("initialize")["protocolVersion"]
+        hello = mcp("initialize")
+        evidence["mcp_protocol"] = hello["protocolVersion"]
+        evidence["version"] = hello["serverInfo"]["version"]
+        version = run(root, [python, "-c", "from importlib.metadata import version; print(version('kbkit'))"], env).stdout.strip()
+        require(cli("--version").strip() == f"kbc {version}" and version == evidence["version"],
+                "wheel metadata, CLI and MCP report different versions")
+        text_status = call("kb_status")
+        structured = mcp("tools/call", output="structured", name="kb_status", arguments={})
+        require(structured["content"] == [] and structured["structuredContent"] == text_status,
+                "MCP payloads differ between text and structured modes")
+        checks["single_mcp_payload"] = "passed"
         require(mcp("ping") == {}, "MCP ping is not available")
         names = {tool["name"] for tool in mcp("tools/list")["tools"]}
         require({"kb_search", "kb_read", "kb_write_plan", "kb_write_apply", "kb_maintain"} <= names, "missing advertised tools")
@@ -241,7 +250,8 @@ def verify(url: str, branch: str | None, expected_sha: str | None, evidence: dic
         for checkout, package in zip((clone, rebuild), packages, strict=True):
             run(root, [python, str(checkout / "scripts" / "build_zipapp.py"), str(package)], env)
         require(packages[0].read_bytes() == packages[1].read_bytes(), "zipapp differs between checkouts of the same SHA")
-        run(root, [python, str(packages[0]), "--version"], env)
+        require(run(root, [python, str(packages[0]), "--version"], env).stdout.strip() == f"kbc {version}",
+                "zipapp and wheel versions differ")
         require("FTS5: available" in run(root, [python, str(packages[0]), "doctor"], env).stdout, "zipapp doctor did not confirm FTS5")
         evidence["zipapp_sha256"] = hashlib.sha256(packages[0].read_bytes()).hexdigest()
         bundled = json.loads(run(root, [python, str(packages[0]), "setup", str(root / "zip-vault"),

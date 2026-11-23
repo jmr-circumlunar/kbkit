@@ -31,7 +31,7 @@ class AssessmentTests(unittest.TestCase):
 
     def request(self, name, **arguments):
         response = handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                           "params": {"name": name, "arguments": arguments}}, self.app)
+                           "params": {"name": name, "arguments": arguments}}, self.app, output="structured")
         self.assertLess(len(json.dumps(response, ensure_ascii=False).encode("utf-8")), 200_000)
         return response["result"]
 
@@ -124,13 +124,12 @@ class AssessmentTests(unittest.TestCase):
         response = handle({"jsonrpc": "2.0", "id": "\x01" * 256, "method": "tools/call",
                            "params": {"name": "kb_read", "arguments": {
                                "path": "wide.md", "lines": [1, 251], "max_bytes": 60_000
-                           }}}, self.app)
+                           }}}, self.app, output="structured")
         self.assertLessEqual(json_size(response), 60_000)
         payload = response["result"]["structuredContent"]
         self.assertTrue(payload["truncated"])
         self.assertTrue(payload["next_lines"])
-        self.assertEqual(json.loads(response["result"]["content"][0]["text"])["hint"],
-                         "See structuredContent or request a smaller max_bytes for paginated tools.")
+        self.assertEqual(response["result"]["content"], [])
 
     def test_scoped_index_refresh_and_config_diagnostics(self):
         unrelated = self.note("elsewhere.md", "distinct old token\n")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
+from inspect import signature
 
 from . import __version__
 from .application import ApplicationService
@@ -113,26 +114,22 @@ def _validate(value, schema, name):
 RESULT_BUDGET = MAX_PAYLOAD_BYTES - 2048
 
 
-def _result(payload, is_error=False):
-    result = {"isError": is_error, "structuredContent": payload,
-              "content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))}]}
-    if json_size(result) > RESULT_BUDGET:
-        # Modern hosts retain the full result. Older hosts can request a
-        # shorter page or use the transaction ID for a mutating tool.
-        summary = {"hint": "See structuredContent or request a smaller max_bytes for paginated tools."}
-        for key in ("transaction_id", "run_id", "state", "status", "index_dirty", "next_offset"):
-            if key in payload:
-                summary[key] = payload[key]
-        result["content"][0]["text"] = json.dumps(summary, ensure_ascii=False, separators=(",", ":"))
-    return result
+OUTPUT_MODES = ("text", "structured")
+
+
+def _result(payload, is_error, output):
+    if output == "structured":
+        return {"isError": is_error, "structuredContent": payload, "content": []}
+    text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return {"isError": is_error, "content": [{"type": "text", "text": text}]}
 
 
 def _failure(code, message, hint, *, retryable=False, details=None):
-    return _result({"code": code, "message": str(message)[:1000], "severity": "error",
-                    "hint": hint, "retryable": retryable, "details": details or {}}, True)
+    return ({"code": code, "message": str(message)[:1000], "severity": "error",
+             "hint": hint, "retryable": retryable, "details": details or {}}, True)
 
 
-def _call(name, arguments, service):
+def _tool_payload(name, arguments, service, output):
     tool = TOOLS[name]
     if service is None:
         return _failure("KB_VAULT_NOT_CONFIGURED", "No vault is configured.",
@@ -142,9 +139,18 @@ def _call(name, arguments, service):
     except (UnicodeError, ValueError) as exc:
         return _failure("KB_ARGUMENT_INVALID", exc, "Call tools/list and use the advertised inputSchema.")
     try:
-        if "max_bytes" in arguments and arguments["max_bytes"] <= MAX_PAYLOAD_BYTES:
-            arguments = {**arguments, "max_bytes": min(arguments["max_bytes"], RESULT_BUDGET - 1024)}
-        payload = getattr(service, tool.method)(**arguments)
+        action = getattr(service, tool.method)
+        if "max_bytes" in tool.schema["properties"]:
+            requested = arguments.get("max_bytes")
+            if requested is None:
+                size_parameter = signature(action).parameters.get("max_bytes")
+                requested = size_parameter.default if size_parameter is not None else 36_000
+            if requested <= MAX_PAYLOAD_BYTES:
+                available = RESULT_BUDGET - 256
+                # JSON inside a text block may add one escape per serialized byte.
+                budget = available // 2 if output == "text" else available
+                arguments = {**arguments, "max_bytes": min(requested, budget)}
+        payload = action(**arguments)
     except QueryError as exc:
         code = "KB_QUERY_ENUM_INVALID" if exc.allowed is not None else "KB_QUERY_INVALID"
         hint = "Choose a value from details.allowed." if exc.allowed is not None else "Retry with literal words or a quoted phrase."
@@ -164,21 +170,29 @@ def _call(name, arguments, service):
         return _failure("KB_VALIDATION_FAILED", exc, "Check the field values against tools/list and inspect the vault with kb_status.")
     except (OSError, sqlite3.Error) as exc:
         return _failure("KB_IO_ERROR", exc, "Check vault and index permissions, then try kbc doctor --vault PATH.", retryable=True)
-    result = _result(payload)
+    return payload, False
+
+
+def _call(name, arguments, service, output):
+    payload, is_error = _tool_payload(name, arguments, service, output)
+    result = _result(payload, is_error, output)
     if json_size(result) <= RESULT_BUDGET:
         return result
+    if is_error:
+        return _result({**payload, "details": {}}, True, output)
     if name in {"kb_write_apply", "kb_write_status"}:
         summary = {key: payload[key] for key in ("transaction_id", "state", "index_dirty") if key in payload}
-        return _result({**summary, "hint": "Use the CLI write status command to read the full receipt."})
-    return _failure("KB_RESPONSE_TOO_LARGE", "The result exceeds the response budget.",
-                    "Request a smaller max_bytes or limit for this tool.")
+        return _result({**summary, "hint": "Use the CLI write status command to read the full receipt."}, False, output)
+    payload, is_error = _failure("KB_RESPONSE_TOO_LARGE", "The result exceeds the response budget.",
+                                 "Request a smaller max_bytes or limit for this tool.")
+    return _result(payload, is_error, output)
 
 
 def _protocol_error(request_id, code, message):
     return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
 
 
-def handle(message: object, service: ApplicationService | None = None) -> dict | None:
+def handle(message: object, service: ApplicationService | None = None, *, output: str = "text") -> dict | None:
     if not isinstance(message, dict) or message.get("jsonrpc") != "2.0" or not isinstance(message.get("method"), str):
         return _protocol_error(None, -32600, "invalid request")
     if "id" not in message:
@@ -212,7 +226,7 @@ def handle(message: object, service: ApplicationService | None = None) -> dict |
         name = params.get("name")
         if not isinstance(name, str) or name not in TOOLS:
             return _protocol_error(request_id, -32602, "unknown tool; call tools/list")
-        result = _call(name, params.get("arguments", {}), service)
+        result = _call(name, params.get("arguments", {}), service, output)
     else:
         return _protocol_error(request_id, -32601, "method not found")
     return {"jsonrpc": "2.0", "id": request_id, "result": result}
