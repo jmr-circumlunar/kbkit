@@ -8,8 +8,10 @@ from collections import Counter
 from contextlib import closing
 from pathlib import Path
 
+from .audit import AUDIT_DISPOSITIONS, read_audit, record_audit
 from .consistency import check_consistency
 from .core import _build_index, _document_metadata, build_index, init_vault, maintain
+from .gates import check_gates
 from .git_adapter import sync_worktree
 from .graph import build_graph
 from .knowledge import KnowledgeVault
@@ -317,6 +319,29 @@ class ApplicationService:
         limit, offset, max_bytes = window(limit, offset, max_bytes)
         target = markdown_path(self.vault, path)
         return self._outline(target.read_bytes(), target.relative_to(self.vault).as_posix(), limit, offset, max_bytes)
+
+    def check(self, limit=25, offset=0, max_bytes=36_000) -> dict:
+        limit, offset, max_bytes = window(limit, offset, max_bytes)
+        vault_id(self.vault)
+        findings = check_gates(self.vault)
+        blocking = sum(item["blocking"] for item in findings)
+        return page(findings, key="findings", limit=limit, offset=offset, max_bytes=max_bytes,
+                    context={"ok": not blocking, "blocking_findings": blocking})
+
+    def record_audit(self, run_id: str, reviewer: str, scope: list[str], findings: list[dict]) -> dict:
+        receipt = record_audit(self.vault, run_id, reviewer, scope, findings)
+        return {key: value for key, value in receipt.items() if key != "findings"}
+
+    def audit_report(self, run_id: str, disposition: str | None = None,
+                     limit=25, offset=0, max_bytes=36_000) -> dict:
+        limit, offset, max_bytes = window(limit, offset, max_bytes)
+        if disposition is not None and disposition not in AUDIT_DISPOSITIONS:
+            raise ValueError("unknown audit finding disposition")
+        receipt = read_audit(self.vault, run_id)
+        entries = receipt.pop("findings")
+        if disposition is not None:
+            entries = [item for item in entries if item["disposition"] == disposition]
+        return page(entries, key="findings", context=receipt, limit=limit, offset=offset, max_bytes=max_bytes)
 
     def lint(self, limit=25, offset=0, max_bytes=36_000) -> dict:
         limit, offset, max_bytes = window(limit, offset, max_bytes)

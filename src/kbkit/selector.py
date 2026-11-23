@@ -22,6 +22,7 @@ class Heading:
     level: int
     start: int
     end: int
+    body_start: int
 
 
 @dataclass(frozen=True)
@@ -88,7 +89,7 @@ def headings(raw: bytes, *, lines: list[bytes] | None = None) -> list[Heading]:
             found[stack.pop()][3] = start
         parent = found[stack[-1]][0] if stack else ()
         stack.append(len(found))
-        found.append([(*parent, title), level, start, len(lines)])
+        found.append([(*parent, title), level, start, len(lines), index + 1])
     return [Heading(*item) for item in found]
 
 
@@ -99,15 +100,20 @@ def blocks(raw: bytes, *, sections: list[Heading] | None = None, line_count: int
     return [Selection(start, end) for start, end in zip(breaks, breaks[1:]) if end > start]
 
 
-def select(raw: bytes, *, heading=None, block=None, lines=None) -> Selection:
+def select(raw: bytes, *, heading=None, block=None, lines=None, heading_body: bool = False) -> Selection:
     count = len(source_lines(raw))
     if heading is not None:
         if not isinstance(heading, list) or not heading or not all(isinstance(part, str) and part for part in heading):
             raise SelectorError("heading must be a nonempty array of titles")
-        matches = [h for h in headings(raw) if h.path == tuple(heading)]
+        sections = headings(raw)
+        matches = [h for h in sections if h.path == tuple(heading)]
         if len(matches) != 1:
             raise SelectorError(f"heading matched {len(matches)} sections")
-        return Selection(matches[0].start, matches[0].end)
+        section = matches[0]
+        if heading_body:
+            boundary = next((h.start for h in sections if section.start < h.start < section.end), section.end)
+            return Selection(section.body_start, boundary)
+        return Selection(section.start, section.end)
     if block is not None:
         match = re.fullmatch(r"([0-9]{1,9})(?:@([0-9a-f]{32}))?", block)
         if match is None:
@@ -136,7 +142,8 @@ def block_locator(block_id: str) -> tuple[str, str]:
     return tuple(block_id.rsplit(":", 1))
 
 
-def resolve_source(root: Path, selector: dict, *, allow_missing_path: bool = False) -> tuple[Path, Selection, bytes]:
+def resolve_source(root: Path, selector: dict, *, allow_missing_path: bool = False,
+                   heading_body: bool = False) -> tuple[Path, Selection, bytes]:
     if not isinstance(selector, dict):
         raise SelectorError("selector must be an object")
     keys = set(selector)
@@ -165,4 +172,4 @@ def resolve_source(root: Path, selector: dict, *, allow_missing_path: bool = Fal
         raise SelectorError("supply path, block_id, path with heading_path, or path with line_range")
     target = markdown_path(root, relative, allow_missing=allow_missing_path and not options)
     raw = target.read_bytes() if target.exists() else b""
-    return target, select(raw, **options), raw
+    return target, select(raw, heading_body=heading_body, **options), raw

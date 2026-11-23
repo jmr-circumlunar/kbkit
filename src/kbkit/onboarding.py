@@ -25,7 +25,9 @@ END = "<!-- kbkit: end -->"
 PREVIOUS_STOCK_SKILLS = {
     "kb-query": {"3243527c2ac5507d14e71a171cc27b1d73868ff379b09c53785d1041b1447c5c"},
     "kb-install": {"6414a973fe61976aec4df5706038662738052fb29a0f6ab6792be90850569a89"},
+    "kb-author": {"59abb9027b89b35ca9b683e47f136810a704dcf729b2b3ab6608ebf2fa47d3af"},
     "kb-maintain": {
+        "780e5bc7d1f127571f511d6a2243c9aa9749a38b91c66ead4c477ccbe23d94f5",
         "7e94cd30611ea023c31e7f17c1e7cbd55f4deabc704cee51a4ef1eb551912512",
         "2d0ced3c80083f5456fb4a4e09c1b3674ab858bd8cfc2e110831d7ff77a0f4d2",
     },

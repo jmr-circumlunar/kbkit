@@ -61,7 +61,8 @@ WorkBuddy 使用托管 Python 和本地 CLI。连接器打包、双源校验和�
 - `kbc sync <vault> --git` 快进同步知识库自己的 Git 分支，然后刷新索引。首次配置远端和分支后，由用户或已授权的定时任务通过 Skill 触发。详细规则见 [同步与检索接口](docs/architecture/INTERFACES.md#同步与配置诊断)。
 - `kbc search <vault> <query> --json` 读取现有索引。大文档可用 `kb_outline` 和 `kb_read` 定向读取。显式查默认排除区时，提供路径并启用历史范围。
 - `kbc write plan <vault> <operations.json>` 预览写入，可用偏移继续读大计划。`kbc write apply <vault> <operations.json> --plan-hash <hash> --request-id <uuid>` 应用计划并保留可安全重试的回执。`kbc write status <vault> <uuid>` 查询结果。Agent 可调用 `kb_write_plan`、`kb_write_apply` 和 `kb_write_status`。
-- `kbc task run <vault>` 手动维护。Agent 确认频率、时区、来源范围和机械修复权限后，在对应宿主创建可修改的任务。已授权的运行使用 `--auto-apply safe`，自动补齐末尾换行并记录结果。报告模式可用 `--auto-apply none`。
+- `kbc task run <vault>` 运行一轮维护。定时任务由 Agent 宿主管理。已授权的运行通过 `--auto-apply safe` 补齐末尾换行、修复已验证的链接并记录结果。可用 `--auto-apply none` 将这些机械修复留作报告。
+- `kbc check <vault>` 执行本库门禁。完成每晚语义审核后，Agent 可用 `kbc audit record <vault> <result.json>` 留下范围、待确认项和已应用的事务回执。用户绑定好 Git 后，Agent 按授权检查差异、提交或推送。 [日常维护和夜间审核](docs/architecture/INTERFACES.md#用户库门禁与夜间审核)
 - `kbc backup create <vault> <archive>` 备份，`kbc backup verify <archive>` 校验，`kbc backup restore <archive> <destination>` 恢复到新目录或空目录。恢复件与原库并存时，给恢复件注册独立身份。
 - 已启用外置元数据的知识库搬迁后，用 `kbc add <new> --identity moved --from <old>` 保留其身份。只复制正文时，用 `kbc add <copy> --identity copy` 创建独立的身份和元数据。
 

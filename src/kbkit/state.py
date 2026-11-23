@@ -13,7 +13,7 @@ from .transaction import find_journal
 
 
 def _executable(payload: dict) -> bool:
-    return (isinstance(payload, dict) and payload.get("operation") in ("append", "set_prop")
+    return (isinstance(payload, dict) and payload.get("operation") in ("append", "set_prop", "replace")
             and isinstance(payload.get("path"), str) and isinstance(payload.get("expected_hash"), str))
 
 

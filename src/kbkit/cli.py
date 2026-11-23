@@ -16,6 +16,7 @@ from zipfile import BadZipFile
 
 from . import __version__
 from .application import ApplicationService, DEFAULT_OUTLINE_BYTES, MAINTENANCE_COLLECTIONS
+from .audit import AUDIT_DISPOSITIONS
 from .backup import create_backup, restore_backup, verify_backup
 from .code_sync import bind_code
 from .core import init_vault
@@ -65,6 +66,18 @@ def build_parser() -> argparse.ArgumentParser:
     write.add_argument("--limit", type=int, default=100)
     write.add_argument("--offset", type=int, default=0)
     write.add_argument("--max-bytes", type=int, default=36_000)
+    audit = commands.add_parser("audit", help="Archive Agent review results and read an audit receipt.")
+    audit_actions = audit.add_subparsers(dest="action", required=True)
+    record = audit_actions.add_parser("record")
+    record.add_argument("vault", type=Path)
+    record.add_argument("file", help="Audit input as a JSON file or - for stdin.")
+    report = audit_actions.add_parser("report")
+    report.add_argument("vault", type=Path)
+    report.add_argument("run_id")
+    report.add_argument("--disposition", choices=AUDIT_DISPOSITIONS)
+    report.add_argument("--limit", type=int, default=25)
+    report.add_argument("--offset", type=int, default=0)
+    report.add_argument("--max-bytes", type=int, default=36_000)
     backup = commands.add_parser("backup", help="Archive, verify or restore a vault.")
     backup_actions = backup.add_subparsers(dest="action", required=True)
     for action in ("create", "verify", "restore"):
@@ -75,12 +88,12 @@ def build_parser() -> argparse.ArgumentParser:
         if action == "restore":
             command.add_argument("destination", type=Path)
 
-    for name in ("index", "sync", "status", "search", "read", "outline", "graph", "lint", "task", "maintain", "proposal", "recover", "restore"):
+    for name in ("index", "sync", "status", "search", "read", "outline", "graph", "lint", "check", "task", "maintain", "proposal", "recover", "restore"):
         command = commands.add_parser(name, help=f"Run {name} for a vault.")
         if name in {"task", "proposal"}:
             command.add_argument("action", choices=["run"] if name == "task" else ["list", "approve", "reject", "apply"])
         command.add_argument("path", type=Path)
-        if name in {"search", "status", "outline", "graph", "lint", "task", "maintain", "proposal"}:
+        if name in {"search", "status", "outline", "graph", "lint", "check", "task", "maintain", "proposal"}:
             command.add_argument("--limit", type=int, default=8 if name in {"search", "outline"} else 25)
             command.add_argument("--offset", type=int, default=0)
             command.add_argument("--max-bytes", type=int, default=DEFAULT_OUTLINE_BYTES if name == "outline" else 36_000)
@@ -267,6 +280,10 @@ def _vault_command(args) -> int:
         result = service.graph(args.collection, path=args.note, **window)
     elif name == "proposal":
         result = _proposal(service, args, window)
+    elif name == "check":
+        result = service.check(**window)
+        _json(result)
+        return int(not result["ok"])
     elif name in {"task", "maintain"}:
         result = service.maintain(collection=args.collection, auto_apply=args.auto_apply, **window)
         _json(result)
@@ -348,6 +365,16 @@ def main() -> int:
                     result = service.apply_operations(operations, args.plan_hash, args.request_id)
             _json(result)
             return int(result.get("state") == "divergent")
+        elif args.command == "audit":
+            service = ApplicationService(args.vault)
+            if args.action == "record":
+                data = sys.stdin.buffer.read() if args.file == "-" else Path(args.file).read_bytes()
+                record = json.loads(data)
+                if not isinstance(record, dict) or record.keys() != {"run_id", "reviewer", "scope", "findings"}:
+                    raise ValueError("audit input must contain run_id, reviewer, scope and findings")
+                _json(service.record_audit(**record))
+            else:
+                _json(service.audit_report(args.run_id, args.disposition, args.limit, args.offset, args.max_bytes))
         elif args.command == "backup":
             if args.action == "create":
                 _json(create_backup(args.vault, args.archive))

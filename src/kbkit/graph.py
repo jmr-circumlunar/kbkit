@@ -6,15 +6,16 @@ import re
 from pathlib import Path
 import unicodedata
 
+from .prototype_markdown import parse_document
 from .storage import markdown_files, vault_files
 
 
 WIKILINK = re.compile(r"\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]")
 
 
-def _targets(text: str):
+def _link_lines(lines: list[str]):
     fence = None
-    for line in text.splitlines():
+    for number, line in enumerate(lines, 1):
         match = re.match(r"^ {0,3}([`~])\1{2,}", line)
         if match:
             marker = match.group()
@@ -24,8 +25,53 @@ def _targets(text: str):
                 fence = None
             continue
         if fence is None:
-            line = re.sub(r"(`+).*?\1", "", line)
-            yield from WIKILINK.findall(line)
+            yield number, line
+
+
+def _targets(text: str):
+    for _, line in _link_lines(text.splitlines()):
+        yield from WIKILINK.findall(re.sub(r"(`+).*?\1", "", line))
+
+
+def link_target(value: str) -> str:
+    return unicodedata.normalize("NFC", value.rstrip("\\").replace("\\", "/"))
+
+
+def link_edit(raw: bytes, targets: dict[str, str]) -> tuple[list[int], str, dict[str, str]] | None:
+    """Return a bounded replacement that edits only matching unanchored links."""
+    document = parse_document(raw)
+    lines = [line.decode("utf-8") for line in document.body.splitlines(keepends=True)]
+    first = last = None
+    used = {}
+    for number, line in _link_lines(lines):
+        masked = re.sub(r"(`+).*?\1", lambda match: " " * len(match[0]), line)
+        changes = []
+        for match in WIKILINK.finditer(masked):
+            escapes = len(line[:match.start()]) - len(line[:match.start()].rstrip("\\"))
+            if escapes % 2:
+                continue
+            start, end = match.span(1)
+            original = line[start:end]
+            old = link_target(original)
+            target = targets.get(old)
+            if target and line[end:end + 1] != "#" and all(char not in target for char in "#|[]"):
+                changes.append((start, end, original, old, target))
+        if not changes:
+            continue
+        updated = line
+        for start, end, original, _, target in reversed(changes):
+            value = target + ("\\" if original.endswith("\\") else "")
+            updated = updated[:start] + value + updated[end:]
+        earliest = first if first is not None else number
+        if len(("".join(lines[earliest - 1:number - 1]) + updated).encode("utf-8")) > 8192:
+            break
+        first, last = earliest, number
+        lines[number - 1] = updated
+        used.update((old, target) for _, _, _, old, target in changes)
+    if first is None:
+        return None
+    offset = len(document.prefix.splitlines()) if document.body_offset > 3 else 0
+    return [first + offset, last + offset], "".join(lines[first - 1:last]), used
 
 
 def build_graph(root: Path) -> dict:
@@ -48,7 +94,7 @@ def build_graph(root: Path) -> dict:
     for source, (path, _) in sorted(paths.items()):
         for target in _targets(path.read_text(encoding="utf-8-sig")):
             # Obsidian table aliases use an escaped pipe, e.g. [[note\|label]].
-            name = unicodedata.normalize("NFC", target.rstrip("\\").replace("\\", "/"))
+            name = link_target(target)
             relative = name if name in files else name + ".md"
             matches = by_name.get(name.removesuffix(".md"), [])
             resolved = files.get(relative)

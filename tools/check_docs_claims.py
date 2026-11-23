@@ -56,7 +56,8 @@ def contract_samples():
             profile_path = init_vault(vault)
             profile_dir = profile_path.parent
             with profile_path.open("a", encoding="utf-8") as stream:
-                stream.write('\n[search.exclude]\nprefixes = ["scratch"]\n')
+                stream.write('\n[search.exclude]\nprefixes = ["scratch"]\n'
+                             '\n[gates]\nrequired_entries = ["missing.md"]\n')
             (vault / "scratch").mkdir()
             (vault / "scratch" / "ignored.md").write_text("# Ignored\n", encoding="utf-8")
             profile = tomllib.loads(profile_path.read_text(encoding="utf-8"))
@@ -79,12 +80,20 @@ def contract_samples():
                 "kb_write_plan": call("kb_write_plan", operations=write),
                 "kb_graph": call("kb_graph"),
                 "kb_lint": call("kb_lint"),
+                "kb_check": call("kb_check"),
                 "kb_facet": call("kb_facet"),
             }
             responses["kb_write_apply"] = call("kb_write_apply", operations=write,
                                               plan_hash=responses["kb_write_plan"]["structuredContent"]["plan_hash"])
             responses["kb_write_status"] = call("kb_write_status",
                                                 transaction_id=responses["kb_write_apply"]["structuredContent"]["transaction_id"])
+            audit_id = responses["kb_write_apply"]["structuredContent"]["transaction_id"]
+            responses["kb_audit_record"] = call("kb_audit_record", run_id=audit_id, reviewer="example-agent",
+                                                scope=["."], findings=[{
+                                                    "path": "sample.md", "category": "stale", "disposition": "applied",
+                                                    "message": "Added evidence", "transaction_id": audit_id,
+                                                }])
+            responses["kb_audit_report"] = call("kb_audit_report", run_id=audit_id)
             call("kb_maintain")
             responses["kb_proposals"] = call("kb_proposals")
             responses["kb_maintain"] = call("kb_maintain", auto_apply="safe", collection="automatic_fixes")
@@ -153,6 +162,7 @@ def check(sources=SOURCE_DOCS) -> list[str]:
     all_fields |= journal_states | graph_names | set(FORMATS) | {"main", "true", "false"}
     all_fields |= set(instances(payloads["kb_write_apply"], "state"))
     all_fields |= set(schemas["kb_maintain"]["properties"]["auto_apply"]["enum"])
+    all_fields |= set(OPERATIONS["items"]["properties"]["position"]["enum"])
     all_fields |= profile.keys() | schemas.keys() | set(OPERATIONS["items"]["properties"]["operation"]["enum"])
     issues = []
     for source in ACTIVE_DESIGN_DOCS:

@@ -228,13 +228,16 @@ def _maintain_proposals(root: Path, state: StateStore, findings: list[dict], aut
     fixes = [finding["fix"] for finding in findings if "fix" in finding]
     expired = state.expire_missing_findings(fixes)
     candidates = {}
-    if automatic and "FM-FINAL-NEWLINE" not in load_profile(root).disabled_rules:
-        # Reconcile an interrupted application even if its newline is already on disk.
+    if automatic:
+        profile = load_profile(root)
+        # Reconcile interrupted applications whose change may already be on disk.
         for status in ("pending", "approved"):
             for proposal_id, risk, _, _, raw in state.list_proposals(status):
                 if risk == "low" and find_journal(root, proposal_id) is not None:
                     fix = json.loads(raw)
-                    if is_automatic_fix(fix) and fix["path"] not in protected:
+                    if (is_automatic_fix(fix) and fix["path"] not in protected
+                            and fix["finding_rule"] not in profile.disabled_rules
+                            and profile.gates.area(fix["path"]) != "historical"):
                         candidates[proposal_id] = fix
     for finding in findings:
         fix = finding.get("fix")

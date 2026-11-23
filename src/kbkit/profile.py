@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import math
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
+from unicodedata import normalize
 
 from .storage import metadata_dir
 
@@ -51,6 +53,58 @@ def matches_prefix(path: str, prefixes: tuple[str, ...]) -> bool:
 
 
 @dataclass(frozen=True)
+class GatePolicy:
+    active_prefixes: tuple[str, ...] = ()
+    historical_prefixes: tuple[str, ...] = ()
+    required_entries: tuple[str, ...] = ()
+    allowed_roots: tuple[str, ...] = ()
+    required_fields: tuple[str, ...] = ()
+    name_pattern: re.Pattern | None = None
+    version_pattern: re.Pattern | None = None
+    version_field: str = "version"
+    block_orphans: bool = False
+    link_targets: dict[str, str] = field(default_factory=dict)
+
+    def area(self, path: str) -> str:
+        if matches_prefix(path, self.historical_prefixes):
+            return "historical"
+        if matches_prefix(path, self.active_prefixes):
+            return "active"
+        return "other"
+
+
+def _gates(config: dict) -> GatePolicy:
+    names = ("active_prefixes", "historical_prefixes", "required_entries", "allowed_roots", "required_fields")
+    lists = {name: _strings(config.get(name, ()), f"gates.{name}") for name in names}
+    for name in names[:4]:
+        lists[name] = tuple(map(prefix, lists[name]))
+    if any("/" in name for name in lists["allowed_roots"]):
+        raise ValueError("gates.allowed_roots must name top-level entries")
+    if any(not entry.lower().endswith(".md") for entry in lists["required_entries"]):
+        raise ValueError("gates.required_entries must name Markdown files")
+    version_field = config.get("version_field", "version")
+    if not isinstance(version_field, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9-]*", version_field):
+        raise ValueError("gates.version_field must be a frontmatter field name")
+    block_orphans = config.get("block_orphans", False)
+    if type(block_orphans) is not bool:
+        raise ValueError("gates.block_orphans must be a boolean")
+    patterns = {}
+    for name in ("name_pattern", "version_pattern"):
+        if name in config:
+            value = config[name]
+            try:
+                patterns[name] = re.compile(value)
+            except (re.error, TypeError) as error:
+                raise ValueError(f"invalid gates.{name}: {error}") from error
+    targets = config.get("link_targets", {})
+    if not isinstance(targets, dict) or any(not name.strip() or not isinstance(value, str) or not value.lower().endswith(".md")
+                                           for name, value in targets.items()):
+        raise ValueError("gates.link_targets must map broken link names to vault-relative Markdown files")
+    return GatePolicy(**lists, **patterns, version_field=version_field, block_orphans=block_orphans,
+                      link_targets={normalize("NFC", name.replace("\\", "/")): prefix(value) for name, value in targets.items()})
+
+
+@dataclass(frozen=True)
 class Profile:
     warnings: tuple[str, ...] = ()
     git_remote: str | None = None
@@ -68,6 +122,8 @@ class Profile:
     tag_vocabulary: tuple[str, ...] | None = None
     title_weight: float = 1.0
     body_weight: float = 1.0
+    templates: dict[str, str] = field(default_factory=dict)
+    gates: GatePolicy = field(default_factory=GatePolicy)
 
     def excluded(self, path: str) -> bool:
         return matches_prefix(path, self.exclude) and not matches_prefix(path, self.allow)
@@ -91,17 +147,22 @@ def load_profile(root: Path) -> Profile:
     states = config.get("states", {})
     lint = config.get("lint", {})
     git = config.get("git", {})
-    if any(not isinstance(table, dict) for table in (search, states, lint, git)):
-        raise ValueError("search, states, lint and git settings must be TOML tables")
+    templates = config.get("templates", {})
+    gates = config.get("gates", {})
+    if any(not isinstance(table, dict) for table in (search, states, lint, git, templates, gates)):
+        raise ValueError("search, states, lint, git, templates and gates settings must be TOML tables")
+    if any(not name or not isinstance(path, str) or not path.lower().endswith(".md") for name, path in templates.items()):
+        raise ValueError("templates must map names to vault-relative Markdown files")
     remote, branch = git.get("remote"), git.get("branch")
     if git and any(not isinstance(value, str) or not value.strip() for value in (remote, branch)):
         raise ValueError("git.remote and git.branch must both be nonempty strings")
     warnings = []
     for table, namespace, known in (
-        (config, "", {"vault_uuid", "schema_version", "search", "states", "lint", "git"}),
+        (config, "", {"vault_uuid", "schema_version", "search", "states", "lint", "git", "templates", "gates"}),
         (search, "search.", {"exclude", "allow", "kinds", "require_state", "title_weight", "body_weight"}),
         (states, "states.", {"aliases", "inactive"}),
         (git, "git.", {"remote", "branch"}),
+        (gates, "gates.", set(GatePolicy.__dataclass_fields__)),
         (lint, "lint.", {"disable", "provenance_kinds", "provenance_fields", "allowed_fields", "tags"}),
     ):
         warnings.extend(f"Unknown profile key: {namespace}{key}" for key in sorted(table.keys() - known))
@@ -146,6 +207,7 @@ def load_profile(root: Path) -> Profile:
         allowed_fields=_strings(lint.get("allowed_fields", ()), "lint.allowed_fields"),
         tag_vocabulary=_strings(lint["tags"], "lint.tags") if "tags" in lint else None,
         title_weight=weights[0], body_weight=weights[1],
+        templates={name: prefix(path) for name, path in templates.items()}, gates=_gates(gates),
     )
 
 

@@ -88,6 +88,20 @@ def _read_journal(journal: Path) -> dict:
     return record
 
 
+def unresolved_transactions(root: Path) -> list[tuple[str, str]]:
+    unresolved = []
+    for journal in transaction_journals(root):
+        try:
+            state = _read_journal(journal)["state"]
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError):
+            state = "damaged"
+        if state not in ("applied", "resolved"):
+            unresolved.append((journal.stem, state))
+    return unresolved
+
+
 def guard_transactions(root: Path, paths: list[str] | None = None) -> None:
     wanted = {os.path.normcase(path) for path in paths} if paths is not None else None
     for journal in transaction_journals(root):
@@ -172,6 +186,34 @@ def _append_preview(before: bytes, end: int, content: str, *, targeted: bool) ->
     return prefix + inserted + suffix, position, preview
 
 
+def _edit_range(before: bytes, start: int, end: int, content: str) -> tuple[bytes, dict, dict]:
+    lines = source_lines(before)
+    document = parse_document(before)
+    first, last = sum(map(len, lines[:start])), sum(map(len, lines[:end]))
+    if document.body_offset > 3 and first < document.body_offset:
+        raise TransactionError("body edits cannot modify frontmatter; use set_prop for scalar fields")
+    if start == 0:
+        first = document.body_offset
+        if end == 0:
+            last = first
+    prefix, removed, suffix = before[:first], before[first:last], before[last:]
+    reference = next((line for line in lines[:end] if line.endswith(b"\n")), b"\n")
+    newline = b"\r\n" if reference.endswith(b"\r\n") else b"\n"
+    inserted = content.encode("utf-8")
+    if inserted:
+        if prefix not in (b"", b"\xef\xbb\xbf") and not prefix.endswith((b"\n", b"\r")):
+            inserted = newline + inserted
+        if (suffix or removed.endswith((b"\n", b"\r"))) and not inserted.endswith((b"\n", b"\r")):
+            inserted += newline
+    leading = b"".join(lines[max(0, start - 2):start])[-100:]
+    trailing = b"".join(lines[end:end + 2])[:100]
+    previous = (leading + removed[:180] + trailing).decode("utf-8", errors="replace")
+    updated = (leading + inserted[:180] + trailing).decode("utf-8", errors="replace")
+    position = {"after_line": start, "byte_offset": first, "removed_bytes": len(removed), "inserted_bytes": len(inserted)}
+    preview = {"before": previous, "after": updated, "diff": _diff(previous, updated)}
+    return prefix + inserted + suffix, position, preview
+
+
 def _diff(before: str, after: str) -> str:
     changes = unified_diff(before.splitlines(), after.splitlines(), lineterm="", n=3)
     return "\n".join(changes)[:450]
@@ -198,10 +240,11 @@ def plan_operations(root: Path, operations: list[dict], dry_run: bool = True) ->
         if not isinstance(operation, dict):
             raise TransactionError("each operation must be an object")
         kind = operation.get("operation")
-        if kind not in ("create", "append", "delete", "move", "rename", "set_prop"):
+        if kind not in ("create", "append", "replace", "insert", "delete", "move", "rename", "set_prop"):
             raise TransactionError("unsupported operation")
         by_kind = {
-            "create": {"content"}, "append": {"content"}, "delete": set(),
+            "create": {"content", "template", "variables"}, "append": {"content"}, "replace": {"content"},
+            "insert": {"content", "position"}, "delete": set(),
             "move": {"destination"}, "rename": {"destination"}, "set_prop": {"property", "value"},
         }
         unknown = operation.keys() - {"operation", "path", "selector", "expected_hash"} - by_kind[kind]
@@ -210,19 +253,29 @@ def plan_operations(root: Path, operations: list[dict], dry_run: bool = True) ->
         if ("selector" in operation) == ("path" in operation):
             raise TransactionError("supply exactly one of path or selector")
         selector = operation["selector"] if "selector" in operation else {"path": operation["path"]}
-        target, selection, before = resolve_source(root, selector, allow_missing_path=kind == "create")
+        at_start = operation.get("position", "start") == "start"
+        target, selection, before = resolve_source(root, selector, allow_missing_path=kind == "create",
+                                                    heading_body=kind == "replace" or (kind == "insert" and at_start))
         relative = reserve(target)
         expected = operation.get("expected_hash")
         if expected is not None and expected != digest(before):
             raise TransactionError(f"hash conflict: {relative}")
         before_hash = digest(before)
         targeted = set(selector) != {"path"}
-        if targeted and kind != "append":
-            raise TransactionError("section, block and line selectors are supported for append only")
-        if targeted and selection.end < len(source_lines(parse_document(before).prefix)):
+        if targeted and kind not in ("append", "replace", "insert"):
+            raise TransactionError("section, block and line selectors are supported for append, replace and insert")
+        if not targeted and kind in ("replace", "insert"):
+            raise TransactionError(f"{kind} requires a heading, block or line range selector")
+        if targeted and kind == "append" and selection.end < len(source_lines(parse_document(before).prefix)):
             raise TransactionError("append would modify the frontmatter; use set_prop for a scalar field")
         if kind in {"create", "append"}:
             content = operation.get("content")
+            if kind == "create" and ("template" in operation or "variables" in operation):
+                if "content" in operation or "template" not in operation:
+                    raise TransactionError("create requires content or a template with optional variables")
+                from .templates import render_template
+
+                content = render_template(root, operation["template"], operation.get("variables", {}))
             if not isinstance(content, str) or not content:
                 raise TransactionError(f"{kind} requires nonempty text content")
             if kind == "create":
@@ -230,6 +283,17 @@ def plan_operations(root: Path, operations: list[dict], dry_run: bool = True) ->
                     raise TransactionError("create requires a new Markdown path in an existing directory")
                 before_hash = None
             after, position, preview = _append_preview(before, selection.end, content, targeted=targeted)
+            changes.append(PlannedChange(relative, before_hash, after, kind, position, preview))
+        elif kind in ("replace", "insert"):
+            content = operation.get("content")
+            if not isinstance(content, str) or (kind == "insert" and not content):
+                raise TransactionError(f"{kind} requires text content")
+            start, end = selection.start, selection.end
+            if kind == "insert":
+                if operation.get("position", "start") not in ("start", "end"):
+                    raise TransactionError("insert position must be start or end")
+                start = end = start if at_start else end
+            after, position, preview = _edit_range(before, start, end, content)
             changes.append(PlannedChange(relative, before_hash, after, kind, position, preview))
         elif kind == "set_prop":
             after = set_frontmatter_field(before, operation.get("property"), operation.get("value"))
@@ -289,6 +353,8 @@ def submit_operations(root: Path, operations: list[dict], plan_hash: str | None,
                 _recover(root, journal, record)
                 return _receipt(request_id, record)
         plan = plan_operations(root, operations, dry_run=False)
+        if plan_hash is None and any(op["operation"] == "replace" and not op.get("expected_hash") for op in operations):
+            raise TransactionError("replace requires a preview plan_hash or the original expected_hash")
         if plan_hash is not None and plan["plan_hash"] != plan_hash:
             raise TransactionError("plan no longer matches; preview again before applying")
         if request_id is not None:

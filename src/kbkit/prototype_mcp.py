@@ -9,6 +9,7 @@ from inspect import signature
 
 from . import __version__
 from .application import ApplicationService
+from .audit import AUDIT_CATEGORIES, AUDIT_DISPOSITIONS
 from .paging import MAX_PAYLOAD_BYTES, json_size
 from .profile import QueryError
 from .selector import SelectorError
@@ -32,8 +33,10 @@ def obj(properties, *required):
 SELECTOR = obj({"path": STRING, "heading_path": STRINGS, "block_id": STRING,
                 "line_range": {"anyOf": [STRING, LINES]}})
 OPERATIONS = {"type": "array", "minItems": 1, "maxItems": 50, "items": obj({
-    "operation": {"type": "string", "enum": ["create", "append", "delete", "move", "rename", "set_prop"]},
+    "operation": {"type": "string", "enum": ["create", "append", "replace", "insert", "delete", "move", "rename", "set_prop"]},
     "path": STRING, "selector": SELECTOR, "content": STRING, "expected_hash": STRING,
+    "position": {"type": "string", "enum": ["start", "end"]},
+    "template": STRING, "variables": {"type": "object", "additionalProperties": STRING},
     "destination": STRING, "property": STRING, "value": STRING,
 }, "operation")}
 
@@ -63,6 +66,17 @@ TOOLS = {
     "kb_facet": Tool("facet", "Count documents by path, kind, state or tags.", obj({"dimension": STRING, "path": TEXT_FILTER, **WINDOW})),
     "kb_graph": Tool("graph", "List one collection of wikilink graph data.", obj({"collection": STRING, "path": STRING, **WINDOW})),
     "kb_lint": Tool("lint", "List deterministic vault findings without applying changes.", obj(WINDOW)),
+    "kb_check": Tool("check", "Check configured vault gates and return the blocking findings.", obj(WINDOW)),
+    "kb_audit_record": Tool("record_audit", "Archive Agent-supplied review results with a stable run UUID.", obj({
+        "run_id": STRING, "reviewer": STRING, "scope": STRINGS,
+        "findings": {"type": "array", "maxItems": 1000, "items": obj({
+            "path": STRING, "category": {"type": "string", "enum": AUDIT_CATEGORIES}, "message": STRING,
+            "disposition": {"type": "string", "enum": AUDIT_DISPOSITIONS}, "transaction_id": STRING,
+        }, "path", "category", "message", "disposition")},
+    }, "run_id", "reviewer", "scope", "findings")),
+    "kb_audit_report": Tool("audit_report", "Read a saved review receipt and optionally filter to pending findings.", obj({
+        **WINDOW, "run_id": STRING, "disposition": {"type": "string", "enum": AUDIT_DISPOSITIONS},
+    }, "run_id")),
     "kb_maintain": Tool("maintain", "Refresh the index and code-bound knowledge, then record findings and authorized mechanical fixes.", obj({
         **WINDOW, "collection": STRING,
         "auto_apply": {"type": "string", "enum": ["none", "safe"], "description": "Set safe only for an authorized run."},
@@ -97,13 +111,14 @@ def _validate(value, schema, name):
     if "enum" in schema and value not in schema["enum"]:
         raise ValueError(f"{name} must be one of: {', '.join(schema['enum'])}")
     if kind == "object":
-        allowed = schema["properties"]
-        unknown = sorted(set(value) - allowed.keys())
+        allowed = schema.get("properties", {})
+        additional = schema.get("additionalProperties")
+        unknown = [] if additional else sorted(set(value) - allowed.keys())
         missing = sorted(set(schema.get("required", ())) - value.keys())
         if unknown or missing:
             raise ValueError(f"{name}: unknown fields {unknown}, missing fields {missing}; allowed fields: {', '.join(allowed)}")
         for key, item in value.items():
-            _validate(item, allowed[key], key)
+            _validate(item, allowed.get(key, additional), key)
     elif kind == "array":
         if not schema.get("minItems", 0) <= len(value) <= schema.get("maxItems", 200):
             raise ValueError(f"{name} has an unsupported number of items")
