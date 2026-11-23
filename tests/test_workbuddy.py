@@ -80,6 +80,7 @@ class WorkBuddyTests(unittest.TestCase):
             env = {
                 **os.environ,
                 "KBKIT_WORKBUDDY_DIR": str(installed),
+                "KBKIT_VAULT": str(root / "uninitialized ambient vault"),
                 "KBKIT_HOME": str(root / "state"),
                 "KBKIT_INDEX_DIR": str(root / "index"),
                 "KBKIT_REGISTRY_DIR": str(root / "registry"),

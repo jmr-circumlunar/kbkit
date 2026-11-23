@@ -68,9 +68,12 @@ def atomic_write(path: Path, data: bytes, *, executable: bool = False) -> None:
 
 def runtime_check(archive: Path, release: dict) -> None:
     command = [sys.executable, "-I", "-X", "utf8", str(archive)]
+    environment = os.environ.copy()
+    environment.pop("KBKIT_VAULT", None)
     for arguments, expected in [(["--version"], f"kbc {release['kbkit_version']}"),
                                 (["doctor"], "FTS5: available")]:
-        result = subprocess.run([*command, *arguments], capture_output=True, text=True, encoding="utf-8", timeout=30)
+        result = subprocess.run([*command, *arguments], env=environment, capture_output=True,
+                                text=True, encoding="utf-8", timeout=30)
         if result.returncode or expected not in result.stdout.splitlines():
             message = (result.stderr or result.stdout).strip()
             raise RuntimeError(message or f"kbkit did not report {expected}")
