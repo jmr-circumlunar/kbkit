@@ -1,0 +1,94 @@
+name: WorkBuddy Release
+
+on:
+  push:
+    tags: ['workbuddy-v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workbuddy-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'jmr-circumlunar/kbkit' && !github.event.deleted
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+      RELEASE_DIR: dist/workbuddy/github
+      PYTHONPATH: ${{ github.workspace }}/src
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Build and validate the tagged package
+        run: |
+          git merge-base --is-ancestor HEAD refs/remotes/origin/main
+          python scripts/build_workbuddy.py --output "$RELEASE_DIR"
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          manifest = json.loads((Path(os.environ["RELEASE_DIR"]) / "release.json").read_bytes())
+          actual_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          if manifest["tag"] != os.environ["RELEASE_TAG"] or manifest["commit"] != actual_commit:
+              raise SystemExit("The Git tag and connector manifest must identify the same release.")
+          PY
+          python "$RELEASE_DIR/kbkit.pyz" doctor
+          python -m unittest discover -s tests -q
+          python tools/check_docs_claims.py
+      - name: Publish the WorkBuddy ZIP and CLI on GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          version="${RELEASE_TAG#workbuddy-v}"
+          assets=("$RELEASE_DIR/kbkit-workbuddy-$version.zip" "$RELEASE_DIR/kbkit.pyz" "$RELEASE_DIR/release.json")
+
+          if ! draft=$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft'); then
+            gh release create "$RELEASE_TAG" --verify-tag --draft --latest=false \
+              --title "kbkit for WorkBuddy $version" \
+              --notes "Upload kbkit-workbuddy-$version.zip to the WorkBuddy Open Platform. The connector installs kbkit.pyz from this release and verifies its SHA-256. Build details are in release.json."
+            draft=true
+          fi
+
+          published_assets=$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')
+          downloaded=$(mktemp -d)
+          for asset in "${assets[@]}"; do
+            name=$(basename "$asset")
+            if grep -Fxq -- "$name" <<< "$published_assets"; then
+              gh release download "$RELEASE_TAG" --pattern "$name" --dir "$downloaded"
+              cmp "$asset" "$downloaded/$name"
+            elif [[ "$draft" == true ]]; then
+              gh release upload "$RELEASE_TAG" "$asset"
+            else
+              echo "Published release is missing $name." >&2
+              exit 1
+            fi
+          done
+          if [[ "$draft" == true ]]; then
+            gh release edit "$RELEASE_TAG" --draft=false --latest=false
+          fi
+      - name: Verify the public CLI download
+        run: |
+          for attempt in 1 2 3; do
+            if python scripts/build_workbuddy.py --output "$RELEASE_DIR" --verify-sources; then
+              exit 0
+            fi
+            if [[ "$attempt" != 3 ]]; then sleep 5; fi
+          done
+          exit 1
