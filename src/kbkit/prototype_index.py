@@ -52,13 +52,22 @@ def _match_expression(query: str) -> str:
 
 
 class FtsIndex:
-    def __init__(self, connection: sqlite3.Connection) -> None:
-        self.connection = connection
+    @staticmethod
+    def needs_rebuild(connection: sqlite3.Connection) -> bool:
         schema = dict(connection.execute(
             "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name IN ('blocks', 'block_text')"
         ))
-        existing = schema.get("blocks", "")
-        self.rebuild_required = "block_id UNINDEXED" not in existing or "content=''" not in existing or "han_title_bigrams" not in existing or "heading_path" not in schema.get("block_text", "")
+        blocks = schema.get("blocks", "")
+        return not all(field in blocks for field in ("block_id UNINDEXED", "content=''", "han_title_bigrams")) or (
+            "heading_path" not in schema.get("block_text", "")
+        )
+
+    def __init__(self, connection: sqlite3.Connection, *, read_only: bool = False) -> None:
+        self.connection = connection
+        self.rebuild_required = False
+        if read_only:
+            return
+        self.rebuild_required = self.needs_rebuild(connection)
         if self.rebuild_required:
             self.connection.execute("DROP TABLE IF EXISTS blocks")
             self.connection.execute("DROP TABLE IF EXISTS block_text")

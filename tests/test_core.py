@@ -238,7 +238,7 @@ class CoreTests(unittest.TestCase):
             build_index(root)
             self.assertEqual(ApplicationService(root).search("move me")["hits"][0]["path"], "new.md")
 
-    def test_search_syncs_external_edits_copies_and_deletions(self):
+    def test_explicit_sync_detects_external_edits_copies_and_deletions(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             init_vault(root)
@@ -246,11 +246,14 @@ class CoreTests(unittest.TestCase):
             note.write_text("# Note\n\noldtoken", encoding="utf-8")
             self.assertEqual(len(ApplicationService(root).search("oldtoken")["hits"]), 1)
             note.write_text("# Note\n\nnewtoken added", encoding="utf-8")
+            ApplicationService(root).sync()
             self.assertEqual(ApplicationService(root).search("oldtoken")["hits"], [])
             copy = root / "copy.md"
             copy.write_bytes(note.read_bytes())
+            ApplicationService(root).sync()
             self.assertEqual({hit["path"] for hit in ApplicationService(root).search("newtoken")["hits"]}, {"original.md", "copy.md"})
             note.unlink()
+            ApplicationService(root).sync()
             self.assertEqual([hit["path"] for hit in ApplicationService(root).search("newtoken")["hits"]], ["copy.md"])
             store = StateStore(root)
             try:

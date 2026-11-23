@@ -55,6 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
     context = commands.add_parser("context", help="Emit bounded SessionStart context as JSON.")
     context.add_argument("vault", type=Path)
     context.add_argument("--note")
+    context.add_argument("--session-start", action="store_true", help="Read the SessionStart event from stdin.")
     write = commands.add_parser("write", help="Plan or apply operations from a JSON file, or from - for stdin.")
     write.add_argument("action", choices=["plan", "apply", "status"])
     write.add_argument("vault", type=Path)
@@ -74,7 +75,7 @@ def build_parser() -> argparse.ArgumentParser:
         if action == "restore":
             command.add_argument("destination", type=Path)
 
-    for name in ("index", "status", "search", "read", "outline", "graph", "lint", "task", "maintain", "proposal", "recover", "restore"):
+    for name in ("index", "sync", "status", "search", "read", "outline", "graph", "lint", "task", "maintain", "proposal", "recover", "restore"):
         command = commands.add_parser(name, help=f"Run {name} for a vault.")
         if name in {"task", "proposal"}:
             command.add_argument("action", choices=["run"] if name == "task" else ["list", "approve", "reject", "apply"])
@@ -83,6 +84,8 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument("--limit", type=int, default=8 if name in {"search", "outline"} else 25)
             command.add_argument("--offset", type=int, default=0)
             command.add_argument("--max-bytes", type=int, default=640 if name == "outline" else 36_000)
+        if name == "sync":
+            command.add_argument("--git", action="store_true", help="Fetch the configured vault branch and fast-forward it.")
         if name == "search":
             command.add_argument("query")
             command.add_argument("--include-excluded", action="store_true")
@@ -248,6 +251,10 @@ def _vault_command(args) -> int:
     if name == "index":
         print(f"changed_blocks: {service.index()['blocks']}")
         return 0
+    if name == "sync":
+        result = service.sync(git=args.git)
+        _json(result)
+        return int(result["index_dirty"])
     if name == "outline":
         result = service.outline(args.relative_path, **window)
     elif name == "graph":
@@ -270,6 +277,7 @@ def _vault_command(args) -> int:
             journals = [journal]
         result = {}
         ok = True
+        refresh = False
         for journal in journals:
             try:
                 outcome = recover_transaction(root, journal, accept_current=args.accept_current)
@@ -277,6 +285,13 @@ def _vault_command(args) -> int:
                 outcome = {"state": "error", "message": str(error)}
             result[journal.name] = outcome
             ok = ok and outcome in ("applied", "resolved")
+            refresh |= outcome == "applied" and journal.parent.name == "transactions"
+        if refresh and (metadata_dir(root) / "profile.toml").is_file():
+            try:
+                service.sync()
+            except (ValueError, OSError, sqlite3.Error) as error:
+                print(f"Files recovered. Run kbc sync to refresh the index: {error}", file=sys.stderr)
+                ok = False
         _json(result)
         return int(not ok)
     elif name == "restore":
@@ -304,7 +319,16 @@ def main() -> int:
         elif args.command == "setup":
             _json(setup(args.vault, args.project, args.host, args.context_note))
         elif args.command == "context":
-            _json(session_context(args.vault, args.note))
+            event = {}
+            if args.session_start and not sys.stdin.isatty():
+                payload = sys.stdin.buffer.read(65_537)
+                try:
+                    event = json.loads(payload) if payload and len(payload) <= 65_536 else {}
+                except (ValueError, RecursionError):
+                    event = {}
+            source = event.get("source") if isinstance(event, dict) else None
+            refresh = args.session_start and source in (None, "startup", "resume", "clear")
+            _json(session_context(args.vault, args.note, refresh=refresh))
         elif args.command == "write":
             service = ApplicationService(args.vault)
             if args.action == "status":

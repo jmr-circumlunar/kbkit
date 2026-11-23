@@ -49,11 +49,13 @@ python -m venv .venv
 
 进入已配置的项目并开启新会话。Codex 读取 `AGENTS.md`，Claude Code 读取 `CLAUDE.md`。涉及项目方法、业务规则、模型、决策或历史时，按规则先调用 `kb_search`，再调用 `kb_read` 核对并引用原文。实现事实以当前代码为准。
 
-通过宿主的项目和 Hook 信任后，SessionStart 用 `additionalContext` 加入同一条查库规则，以及配置时授权的一篇路由笔记（最多 3000 字符）。工具调用顺序由 Agent 按项目规则执行。可以在新会话问「怎么备份知识库」，查看实际工具调用及来源。
+升级已有项目时，重新运行 `kbc setup <vault> --project <project> --host codex`，Claude Code 使用对应的宿主参数。通过宿主的项目和 Hook 信任后，SessionStart 用 `additionalContext` 加入同一条查库规则，以及配置时授权的一篇路由笔记（最多 3000 字符）。工具调用顺序由 Agent 按项目规则执行。可以在新会话问「怎么备份知识库」，查看实际工具调用及来源。
 
 ## 使用和维护
 
-- `kbc search <vault> <query> --json` 搜索知识。大文档可用 `kb_outline` 和 `kb_read` 定向读取。显式查默认排除区时，提供路径并启用历史范围。
+- `kbc sync <vault>` 或 `kb_sync` 检查外部 Markdown 改动。受信任的会话启动 Hook 会执行一次本地同步。kbkit 自己的写入仍立即更新对应文件的索引。
+- `kbc sync <vault> --git` 快进同步知识库自己的 Git 分支，然后刷新索引。首次配置远端和分支后，由用户或已授权的定时任务通过 Skill 触发。详细规则见 [同步与检索接口](docs/architecture/INTERFACES.md#同步与配置诊断)。
+- `kbc search <vault> <query> --json` 读取现有索引。大文档可用 `kb_outline` 和 `kb_read` 定向读取。显式查默认排除区时，提供路径并启用历史范围。
 - `kbc write plan <vault> <operations.json>` 预览写入，可用偏移继续读大计划。`kbc write apply <vault> <operations.json> --plan-hash <hash> --request-id <uuid>` 应用计划并保留可安全重试的回执。`kbc write status <vault> <uuid>` 查询结果。Agent 可调用 `kb_write_plan`、`kb_write_apply` 和 `kb_write_status`。
 - `kbc task run <vault>` 手动维护。启用定时维护时，Agent 确认一次频率、时区和来源范围，在对应宿主创建可修改的任务。例行安全变更直接执行并写报告。
 - `kbc backup create <vault> <archive>` 备份，`kbc backup verify <archive>` 校验，`kbc backup restore <archive> <destination>` 恢复到新目录或空目录。恢复件与原库并存时，给恢复件注册独立身份。

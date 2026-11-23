@@ -56,7 +56,7 @@ Windows Task Scheduler 负责定时唤起命令，kbkit 负责读取任务定义
 3. Agent 调用 `setup` 注册 vault、建立索引，为 Codex 或 Claude Code 生成项目级配置。其他支持 stdio 的宿主可挂接 MCP 并自行加载项目规则。
 4. Agent 验证 search、read 和 status。宿主完成项目与 Hook 信任后，在新会话检查工具发现和查询顺序。
 
-项目规则要求在回答项目知识问题时先用 `kb_search`，再用 `kb_read` 核对原文和来源。这个规则保存在 `AGENTS.md` 或 `CLAUDE.md`。SessionStart 用 `additionalContext` 加载同一规则，加上明示授权的一篇库内 Markdown 路由笔记（最多 3000 字符）。会话内按需检索最新条目。这个 Hook 负责加载会话上下文，项目规则负责引导 Agent 选择查询工具。
+项目规则要求在回答项目知识问题时先用 `kb_search`，再用 `kb_read` 核对原文和来源。这个规则保存在 `AGENTS.md` 或 `CLAUDE.md`。SessionStart 用 `additionalContext` 加载同一规则，加上明示授权的一篇库内 Markdown 路由笔记（最多 3000 字符）。新建或恢复会话、清空会话时，Hook 先执行一次本地增量同步，再加载会话上下文。压缩或分叉沿用已建立的索引，并继续加载路由上下文。正常查询直接读取索引。用户在会话中通过 Obsidian 等外部编辑器改动知识后，Agent 可调用 kb_sync；常规 kbkit 写入仍立即刷新受影响文件。已授权的知识库 Git 拉取由 Skill 调用组件同步入口。
 
 MCP 配置的最小形态如下，具体字段名由宿主决定：
 

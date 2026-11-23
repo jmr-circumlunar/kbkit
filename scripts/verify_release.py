@@ -164,6 +164,7 @@ def verify(url: str, branch: str | None, expected_sha: str | None, evidence: dic
         (vault / "中文.md").write_text("# 数据库连接池设计\n\nERR_TIMEOUT", encoding="utf-8")
         (vault / "旧版.md").write_text("---\nstate: archived\n---\n# 数据库连接池旧版", encoding="utf-8")
         (vault / "标识符.md").write_text("# ERR TIMEOUT", encoding="utf-8")
+        call("kb_sync")
         for query in ("连接", "连接池", "ERR_TIMEOUT"):
             require({hit["path"] for hit in call("kb_search", query=query)["hits"]} == {"中文.md"},
                     f"unexpected retrieval results for {query}")
@@ -177,6 +178,7 @@ def verify(url: str, branch: str | None, expected_sha: str | None, evidence: dic
         cli("knowledge", "review", str(vault), design.name)
         cli("knowledge", "review", str(vault), manual.name, "--depends-on", design.name)
         design.write_text("# Design\n\nredfinch revised\n", encoding="utf-8")
+        call("kb_sync")
         require(bool(call("kb_search", query="redfinch", include_inactive=True)["hits"]), "edit not refreshed")
         require(not call("kb_search", query="oldmanual")["hits"], "stale dependency remained in default results")
         require(call("kb_search", query="oldmanual", include_inactive=True)["hits"][0]["state"] == "stale", "stale state was not exposed")

@@ -237,11 +237,104 @@ class IntegrityRegressionTests(unittest.TestCase):
         note_hook = self.run_cli("context", root, "--note", "first.md")
         self.assertIn("standalone-write", json.loads(note_hook.stdout)["hookSpecificOutput"]["additionalContext"])
 
-    def test_quick_search_detects_edit_preserving_size_and_mtime(self):
+    def test_session_start_detects_external_edit_and_warm_search_never_scans(self):
         note = self.note("source.md", b"# Before markerabc\n")
-        self.assertTrue(self.service.search("markerabc")["hits"])
+        initial = self.service.search("markerabc")["hits"][0]
         original = note.stat()
         note.write_bytes(b"# Before markerxyz\n")
         os.utime(note, ns=(original.st_atime_ns, original.st_mtime_ns))
-        self.assertEqual(self.service.search("markerabc")["hits"], [])
-        self.assertTrue(self.service.search("markerxyz")["hits"])
+        project = self.base / "session project"
+        installed = self.run_cli("setup", self.vault, "--project", project, "--host", "codex")
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        note.write_bytes(b"# Before markertwo\n")
+        with self.assertRaisesRegex(ValueError, "earlier document version"):
+            self.service.read(block_id=initial["block_id"])
+        hook = json.loads((project / ".codex" / "hooks.json").read_bytes())["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+        clean_environment = {key: value for key, value in os.environ.items()
+                             if key not in {"KBKIT_HOME", "KBKIT_INDEX_DIR", "KBKIT_REGISTRY_DIR"}}
+
+        def event(source):
+            run = subprocess.run(hook, shell=os.name != "nt", input=json.dumps({"source": source}).encode(),
+                                 capture_output=True, timeout=25, env=clean_environment)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            payload = json.loads(run.stdout)
+            self.assertNotIn("systemMessage", payload)
+            self.assertIn("kb_search", payload["hookSpecificOutput"]["additionalContext"])
+
+        with patch("kbkit.core.index_sources", side_effect=AssertionError("warm lookup scanned Markdown")):
+            event("compact")
+            self.assertTrue(self.service.search("markerxyz")["hits"])
+            self.assertFalse(self.service.search("markertwo")["hits"])
+            self.service.facet()
+            self.service.status()
+        event("startup")
+        self.assertFalse(self.service.search("markerxyz")["hits"])
+        self.assertTrue(self.service.search("markertwo")["hits"])
+        self.assertEqual(self.service.apply_operations([{"operation": "append", "path": note.name,
+                                                         "content": " immediatelyindexed"}])["state"], "applied")
+        self.assertTrue(self.service.search("immediatelyindexed")["hits"])
+
+    def test_broken_profile_status_returns_diagnostics_and_search_fails_closed(self):
+        profile = metadata_dir(self.vault) / "profile.toml"
+        with profile.open("a", encoding="utf-8") as stream:
+            stream.write("\n[search]\nrequire_state = true\n[search]\n")
+        status = self.run_cli("status", self.vault, "--max-bytes", "512")
+        self.assertEqual(status.returncode, 0, status.stderr)
+        result = json.loads(status.stdout)
+        self.assertFalse(result["profile_valid"])
+        self.assertIn("profile.toml", result["profile_error"])
+        self.assertIn("line", result["profile_error"])
+        search = self.run_cli("search", self.vault, "marker", "--json")
+        self.assertEqual(search.returncode, 1)
+        self.assertIn(b"invalid vault profile", search.stderr)
+
+    def test_git_sync_fast_forwards_only_and_indexes_the_result(self):
+        seed = self.base / "seed"
+        seed.mkdir()
+        bare = self.base / "remote.git"
+
+        def git(cwd, *args):
+            result = subprocess.run(["git", *map(str, args)], cwd=cwd, capture_output=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stdout.decode("utf-8").strip()
+
+        def commit(cwd, marker):
+            (cwd / "tracked.md").write_text(f"# Vault\n\n{marker}\n", encoding="utf-8")
+            git(cwd, "add", "--", "tracked.md")
+            git(cwd, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", marker)
+
+        git(seed, "init", "--initial-branch=main")
+        commit(seed, "oldmarker")
+        git(self.base, "clone", "--bare", seed, bare)
+        git(self.base, "clone", bare, self.vault)
+        self.service.sync()
+        self.assertTrue(self.service.search("oldmarker")["hits"])
+        profile = metadata_dir(self.vault) / "profile.toml"
+        with profile.open("a", encoding="utf-8") as stream:
+            stream.write('\n[git]\nremote = "origin"\nbranch = "main"\n')
+        commit(seed, "newmarker")
+        git(seed, "push", bare, "main")
+        self.service.sync()
+        self.assertFalse(self.service.search("newmarker")["hits"])
+
+        local = self.vault / "tracked.md"
+        original = local.read_bytes()
+        local.write_bytes(b"local edits")
+        blocked = self.run_cli("sync", self.vault, "--git")
+        self.assertEqual(blocked.returncode, 1)
+        self.assertIn(b"local changes", blocked.stderr)
+        self.assertEqual(local.read_bytes(), b"local edits")
+        local.write_bytes(original)
+        synced = self.run_cli("sync", self.vault, "--git")
+        self.assertEqual(synced.returncode, 0, synced.stderr)
+        self.assertEqual(json.loads(synced.stdout)["git_status"], "updated")
+        self.assertTrue(self.service.search("newmarker")["hits"])
+        self.assertFalse(self.service.search("oldmarker")["hits"])
+        commit(seed, "upstreamonly")
+        git(seed, "push", bare, "main")
+        commit(self.vault, "localonly")
+        before = git(self.vault, "rev-parse", "HEAD")
+        rejected = self.run_cli("sync", self.vault, "--git")
+        self.assertEqual(rejected.returncode, 1)
+        self.assertEqual(git(self.vault, "rev-parse", "HEAD"), before)
+        self.assertEqual(git(self.vault, "for-each-ref", "refs/kbkit/sync"), "")

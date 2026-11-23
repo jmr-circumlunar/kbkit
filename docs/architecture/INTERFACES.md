@@ -8,6 +8,7 @@ CLI 和 stdio MCP 共用应用服务。Agent 应以 `tools/list` 的输入 schem
 | --- | --- |
 | 环境和库 | `kbc doctor --vault <vault>`、`kbc init <vault>`、`kbc status <vault>` |
 | 注册和选库 | `kbc add <vault>`、`kbc use <uuid>`、`kbc current` |
+| 同步 | `kbc sync <vault>`、`kbc sync <vault> --git` |
 | 搜索和导航 | `kbc index <vault>`、`kbc search <vault> <query> --json`、`kbc read <vault> <note>`、`kbc outline <vault> <note>`、`kbc graph <vault>` |
 | 治理和恢复 | `kbc lint <vault>`、`kbc maintain <vault>`、`kbc task run <vault>`、`kbc proposal list <vault>`、`kbc proposal approve <vault> <id>`、`kbc proposal reject <vault> <id>`、`kbc proposal apply <vault> <id>`、`kbc recover <vault>`、`kbc restore <vault> <entry-id>` |
 | 复核和来源 | `kbc knowledge status <vault>`、`kbc knowledge review <vault> <note>`、`kbc knowledge history <vault> <note>`、`kbc knowledge bind-code <vault> <id> <repo> --ref <ref> --scope <dir>` |
@@ -15,11 +16,11 @@ CLI 和 stdio MCP 共用应用服务。Agent 应以 `tools/list` 的输入 schem
 
 ## MCP
 
-stdio 使用 UTF-8。服务协商 `2025-11-25` 或 `2025-06-18`，工具结果同时返回 JSON 文本和 `structuredContent`。工具执行失败时，`isError` 为 `true`，结构化结果含错误码、原因和处理建议。格式错误的 JSON-RPC 请求及未知工具返回协议层错误。
+stdio 使用 UTF-8。服务协商 `2025-11-25` 或 `2025-06-18`，工具结果同时提供 JSON 文本和 `structuredContent`。常规小响应同时携带这两种表示，用于兼容旧宿主。较大的响应会将兼容文本压缩为摘要，完整结构化数据继续受 JSON-RPC 帧预算约束。工具执行失败时，`isError` 为 `true`，结构化结果含错误码、原因和处理建议。格式错误的 JSON-RPC 请求及未知工具返回协议层错误。
 
 | 用途 | 工具 |
 | --- | --- |
-| 状态和索引 | `kb_status`、`kb_index` |
+| 状态和索引 | `kb_status`、`kb_sync`、`kb_index` |
 | 检索和阅读 | `kb_search`、`kb_read`、`kb_outline`、`kb_facet`、`kb_graph` |
 | 维护 | `kb_maintain`、`kb_maintenance_report`、`kb_lint`、`kb_proposals`、`kb_proposal_apply` |
 | 事务 | `kb_write_plan`、`kb_write_apply`、`kb_write_status`、`kb_restore` |
@@ -31,8 +32,24 @@ stdio 使用 UTF-8。服务协商 `2025-11-25` 或 `2025-06-18`，工具结果�
 - `kb_search` 支持 `query`、`path`、`kind`、`state`、`tags`、`symbols`、`exclude` 和 `include_inactive`。`path` 和 `kind` 多值为 OR，`tags` 和 `symbols` 多值为 AND。前缀按目录边界匹配。显式选定某个非活跃状态时，该状态可参与检索。符号过滤区分大小写。非法枚举通过 `KB_QUERY_ENUM_INVALID` 返回有效选项。
 - 搜索默认 `limit=8`，最大 50。`max_chars` 默认 1200，`budget_chars` 可限制整页正文字符数。`select` 支持 `snippet`、`path`、`full`、`json`。`full` 从命中块开头取正文，仍受字符和字节预算限制。`total_candidates` 是应用过滤后、分页前的块数。
 - 搜索命中提供 `path`、`block_id`、`heading_path`、`lines`、`line_start`、`line_end`、`vault_id`、`state`、`stale`、`score`。正文模式提供 `content`、`content_truncated` 和 `hit_line`。行号从 1 开始，两端均包含。`score` 为反向 BM25，越大越靠前。
-- `kb_read` 按 `path` 读源文件，或提供 `heading`（如 `["设计", "边界"]`）、`block_id` 或 `lines`（如 `[12, 18]`）。凭 `block_id` 可省略路径。搜索返回的块 ID 绑定文件版本，源文件变化后重新检索获取 ID。大文件的整篇请求返回章节预览和建议行区间。显式范围过长时，以 `next_lines` 续读。单行超限时，`line_truncated` 和 `hint` 会说明如何读取。
+- `kb_read` 按 `path` 读源文件，或提供 `heading`（如 `["设计", "边界"]`）、`block_id` 或 `lines`（如 `[12, 18]`）。凭 `block_id` 可省略路径。搜索返回的块 ID 绑定文件版本，源文件发生外部改动后先同步再重新检索获取 ID。大文件的整篇请求返回章节预览和建议行区间。显式范围过长时，以 `next_lines` 续读。单行超限时，`line_truncated` 和 `hint` 会说明如何读取。
 - `kb_outline` 返回标题树及行区间。`kb_facet` 默认预览四个维度；按 `path`、`kind`、`state` 或 `tags` 单独查看完整分布。`kb_graph` 的 `collection` 支持 `edges`、`broken`、`nodes`、`backlinks`、`orphaned`。可用 `path` 将图限定到一篇笔记。
+
+### 同步与配置诊断
+
+- 会话开始时执行一次本地增量同步。会话中的搜索和分面读取现有索引，缺失或可识别的不兼容索引会自动重建。kbkit 自身的事务写入会更新相关文件的索引。
+- 如果用户在会话中直接编辑了 Markdown，调用 kb_sync 或运行 kbc sync <vault>。没有会话 Hook 的宿主可以在首次需要知识库时调用一次本地同步。定时维护与 kbc index <vault> 会校验正文哈希。
+- 配置无效时，状态接口返回诊断和修复提示。检索等需要有效配置的操作应等配置修正后再执行，以保留原来的过滤约束。
+
+知识库自己可选用 Git。仓库根目录设为 vault 根目录，事先配置可信远端与对应本地分支，并把 .kbkit 元数据外置或加入 Git 忽略规则。首次授权后在 profile.toml 设置：
+
+```toml
+[git]
+remote = "origin"
+branch = "main"
+```
+
+通过 Skill 调用 kbc sync <vault> --git 后，组件检查事务状态、当前分支和工作区。Git 拉取只允许快进，遇到未提交改动、分叉或待恢复事务会保留现场。成功后同步索引。若 Git 已更新但索引刷新失败，回执会报告索引待修复。会话 Hook 执行的是本地同步。业务代码仓库仍按绑定的已提交版本参与维护。
 
 ### 分页和维护
 

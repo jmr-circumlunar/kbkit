@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .consistency import check_consistency
 from .core import _build_index, _document_metadata, build_index, init_vault, maintain
+from .git_adapter import sync_worktree
 from .graph import build_graph
 from .knowledge import KnowledgeVault
 from .lint import lint
@@ -21,7 +22,8 @@ from .retrieval import _rows, _snapshot, _status, facets, search_page
 from .selector import SelectorError, block_locator, headings, markdown_path, select, source_lines
 from .state import StateStore
 from .storage import metadata_dir
-from .transaction import plan_operations, restore_from_trash, submit_operations, transaction_status
+from .transaction import guard_transactions, plan_operations, restore_from_trash, submit_operations, transaction_status
+from .vault_profile import vault_id
 from .writer import apply_proposal
 
 
@@ -37,6 +39,30 @@ class ApplicationService:
 
     def index(self) -> dict:
         return {"blocks": build_index(self.vault)}
+
+    def sync(self, *, git: bool = False) -> dict:
+        vault_id(self.vault)
+        profile = load_profile(self.vault)
+        metadata = metadata_dir(self.vault)
+        with file_lock(metadata / "maintenance.lock"), file_lock(metadata / "write.lock"):
+            result = {}
+            if git:
+                if not profile.git_remote or not profile.git_branch:
+                    raise ValueError("configure git.remote and git.branch in profile.toml before syncing Git")
+                guard_transactions(self.vault)
+                result = sync_worktree(self.vault, profile.git_remote, profile.git_branch)
+                # A tracked profile can change when the worktree advances.
+                try:
+                    vault_id(self.vault)
+                    load_profile(self.vault)
+                except (ValueError, OSError) as error:
+                    return {**result, "index_dirty": True, "error": str(error)}
+            try:
+                return {**result, "changed_blocks": _build_index(self.vault, verify=False), "index_dirty": False}
+            except (sqlite3.Error, ValueError, OSError) as error:
+                if not git:
+                    raise
+                return {**result, "index_dirty": True, "error": str(error)}
 
     def search(self, query: str = "", include_inactive: bool = False, **options) -> dict:
         return search_page(self.vault, query, include_inactive, **options)
@@ -99,7 +125,19 @@ class ApplicationService:
     def status(self, limit=25, offset=0, max_bytes=36_000) -> dict:
         limit, offset, max_bytes = window(limit, offset, max_bytes)
         profile_path = metadata_dir(self.vault) / "profile.toml"
-        profile = load_profile(self.vault)
+        initialized = profile_path.is_file()
+        try:
+            profile = load_profile(self.vault)
+            if initialized:
+                vault_id(self.vault)
+        except (ValueError, OSError) as error:
+            context = {"initialized": initialized, "profile_valid": False, "profile_error": "",
+                       "hint": "Fix profile.toml before searching or syncing."}
+            message = str(error)[:max_bytes]
+            while json_size({**context, "profile_error": message}) > max_bytes - 100:
+                message = message[:-1]
+            context["profile_error"] = message
+            return page([], key="knowledge_entries", limit=limit, offset=offset, max_bytes=max_bytes, context=context)
         knowledge = KnowledgeVault(self.vault)
         statuses = []
         source_states, effective, unknown = Counter(), Counter(), Counter()

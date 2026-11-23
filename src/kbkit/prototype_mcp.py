@@ -46,7 +46,8 @@ class Tool:
 
 TOOLS = {
     "kb_status": Tool("status", "Inspect the vault profile, lifecycle counts and knowledge freshness.", obj(WINDOW)),
-    "kb_index": Tool("index", "Synchronize the derived index with Markdown content.", obj({})),
+    "kb_index": Tool("index", "Verify Markdown content hashes and synchronize the derived index.", obj({})),
+    "kb_sync": Tool("sync", "Check for external Markdown edits and incrementally update the local index.", obj({})),
     "kb_search": Tool("search", "Search Markdown blocks with metadata filters and bounded results.", obj({
         **WINDOW, "query": STRING, "include_inactive": BOOLEAN, "include_excluded": BOOLEAN, "max_chars": INTEGER, "select": STRING,
         "path": TEXT_FILTER, "kind": TEXT_FILTER, "state": TEXT_FILTER,

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
 import shlex
+import sqlite3
 import subprocess
 import sys
 import tomllib
@@ -16,14 +18,24 @@ from .skills import list_skills, resource_directory
 from .transaction import write_atomic
 
 
-ROUTING = """For the project's methods, business rules, models, decisions, and prior work, search the registered knowledge base first with kb_search. Use the project scope and current state, then verify the relevant passages with kb_read and cite their source. Use current code to verify implementation facts. If the knowledge base is unavailable or has no useful evidence, say so and continue with the available sources."""
+ROUTING = """For the project's methods, business rules, models, decisions, and prior work, search the registered knowledge base first with kb_search. Use the project scope and current state, then verify the relevant passages with kb_read and cite their source. Use current code to verify implementation facts. Use kb_sync before searching if the user just edited Markdown externally or a source locator became stale. If the knowledge base is unavailable or has no useful evidence, say so and continue with the available sources."""
 STARTER = "00-索引/工作空间上下文.md"
 BEGIN = "<!-- kbkit: begin -->"
 END = "<!-- kbkit: end -->"
+PREVIOUS_STOCK_SKILLS = {
+    "kb-query": "3243527c2ac5507d14e71a171cc27b1d73868ff379b09c53785d1041b1447c5c",
+    "kb-maintain": "7e94cd30611ea023c31e7f17c1e7cbd55f4deabc704cee51a4ef1eb551912512",
+}
 
 
-def session_context(vault: Path, note: str | None = None) -> dict:
+def session_context(vault: Path, note: str | None = None, *, refresh: bool = False) -> dict:
     summary = ROUTING
+    warnings = []
+    if refresh:
+        try:
+            ApplicationService(vault).sync()
+        except (OSError, ValueError, sqlite3.Error) as error:
+            warnings.append(f"kbkit: local sync failed ({str(error)[:400]}). Run kb_sync after fixing it.")
     if note:
         try:
             page = markdown_path(vault.resolve(), note)
@@ -32,9 +44,11 @@ def session_context(vault: Path, note: str | None = None) -> dict:
                 raise ValueError("the routing note must contain 1–3000 Markdown characters")
             summary += "\n\n" + content
         except (SelectorError, OSError, ValueError) as error:
-            return {"systemMessage": f"kbkit: workspace context could not be loaded ({error})",
-                    "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": summary}}
-    return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": summary}}
+            warnings.append(f"kbkit: workspace context could not be loaded ({str(error)[:400]})")
+    result = {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": summary}}
+    if warnings:
+        result["systemMessage"] = "\n".join(warnings)
+    return result
 
 
 def _routing_file(path: Path) -> str:
@@ -98,21 +112,37 @@ def _host_files(project: Path, vault: Path, host: str, note: str | None) -> dict
     hook = _load_json(hooks_file)
     groups = hook.setdefault("hooks", {}).setdefault("SessionStart", [])
     arguments = [executable, *runtime, "context", str(vault)]
-    context_command = shlex.join(arguments)
+    runtime_prefix = list(arguments)
+    arguments.append("--session-start")
+    hook_env = {key: value for key, value in env.items() if key != "KBKIT_VAULT"}
     if note:
         arguments += ["--note", note]
     if os.name == "nt":
         launcher = account / "kbkit-context.ps1"
         quoted = " ".join("'" + argument.replace("'", "''") + "'" for argument in arguments)
-        program = "[Console]::OutputEncoding = [Text.Encoding]::UTF8\n& " + quoted + "\nexit $LASTEXITCODE\n"
+        variables = "".join(f"$env:{key} = '" + value.replace("'", "''") + "'\n" for key, value in hook_env.items())
+        program = "[Console]::OutputEncoding = [Text.Encoding]::UTF8\n" + variables + "& " + quoted + "\nexit $LASTEXITCODE\n"
         files[launcher] = program.encode("utf-8-sig")
         command = subprocess.list2cmdline(["powershell.exe", "-NoProfile", "-NonInteractive", "-File", str(launcher)])
     else:
-        command = shlex.join(arguments)
+        assignments = [f"{key}={value}" for key, value in hook_env.items()]
+        command = shlex.join(["env", *assignments, *arguments] if assignments else arguments)
+
     def is_kbkit_hook(entry: dict) -> bool:
         previous = entry.get("command", "")
-        return previous == command or (os.name != "nt" and
-                                       (previous == context_command or previous.startswith(context_command + " --note ")))
+        if previous == command:
+            return True
+        if os.name == "nt":
+            return False
+        try:
+            parts = shlex.split(previous)
+        except ValueError:
+            return False
+        if parts and parts[0] == "env":
+            parts = parts[1:]
+            while parts and parts[0].partition("=")[0] in ("KBKIT_HOME", "KBKIT_INDEX_DIR", "KBKIT_REGISTRY_DIR"):
+                parts = parts[1:]
+        return parts[:len(runtime_prefix)] == runtime_prefix
 
     existing = next(((group, entry) for group in groups for entry in group.get("hooks", [])
                      if is_kbkit_hook(entry)), None)
@@ -132,9 +162,10 @@ def _host_files(project: Path, vault: Path, host: str, note: str | None) -> dict
     for skill in list_skills():
         target = skills_dir / skill["name"] / "SKILL.md"
         body = skill["content"].encode("utf-8")
-        if target.is_file() and target.read_bytes().replace(b"\r\n", b"\n") != body.replace(b"\r\n", b"\n"):
-            # A project may already ship a different skill with this public name.
-            continue
+        if target.is_file():
+            current = target.read_bytes().replace(b"\r\n", b"\n")
+            if current != body.replace(b"\r\n", b"\n") and sha256(current).hexdigest() != PREVIOUS_STOCK_SKILLS.get(skill["name"]):
+                continue  # Preserve customized Skills.
         files[target] = body
     return files
 
@@ -163,9 +194,10 @@ def setup(vault: Path, project: Path, host: str, context_note: str | None) -> di
                     write_atomic(target, source.read_bytes(), exclusive=True)
                 except FileExistsError:
                     continue
-    index = app.index()
+    app.index()
+    indexed_blocks = app.status(limit=1)["indexed_blocks"]
     for path, data in files.items():
         if not path.is_file() or path.read_bytes() != data:
             write_atomic(path, data)
-    return {**initialized, "vault": str(vault), "host": host, "indexed_blocks": index["blocks"],
+    return {**initialized, "vault": str(vault), "host": host, "indexed_blocks": indexed_blocks,
             "files": [str(path) for path in files]}

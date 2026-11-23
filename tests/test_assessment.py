@@ -214,6 +214,7 @@ class AssessmentTests(unittest.TestCase):
             self.assertEqual(self.ok("kb_restore", entry_id=entry)["status"], "restored")
             self.assertEqual(prior.read_text(), f"unique{i}")
         self.assertTrue(all(file.stat().st_size for file in self.root.glob("*.md")))
+        self.ok("kb_sync")
         self.assertEqual(self.ok("kb_search", query="payload")["total_candidates"], 3)
 
     def test_profile_filters_states_and_same_metadata_edit(self):
@@ -252,6 +253,7 @@ inactive = ["paused"]
         stat = live.stat()
         live.write_bytes(live.read_bytes().replace(b"WeeklyReportExcelExporter", b"WeeklyReportExcelExported"))
         os.utime(live, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        self.ok("kb_sync")
         self.assertEqual(self.ok("kb_search", symbols="WeeklyReportExcelExporter")["total_candidates"], 0)
         self.assertEqual(self.ok("kb_search", symbols="WeeklyReportExcelExported")["total_candidates"], 1)
 

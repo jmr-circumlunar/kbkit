@@ -6,14 +6,13 @@ import json
 import re
 import sqlite3
 from collections import Counter
-from contextlib import closing, contextmanager
+from contextlib import ExitStack, closing, contextmanager
 
-from .core import _build_index
+from .core import build_index
 from .knowledge import KnowledgeVault
 from .paging import integer, page, window
 from .profile import QueryError, load_profile, matches_prefix, prefix, values
 from .prototype_index import FtsIndex
-from .prototype_lock import file_lock
 from .storage import metadata_dir
 from .vault_profile import index_path, vault_id
 
@@ -27,10 +26,27 @@ SYMBOL = re.compile(r"[A-Za-z_][A-Za-z_0-9]*")
 def _snapshot(root):
     if not (metadata_dir(root) / "profile.toml").is_file():
         raise ValueError("vault is not initialized; run kbc init first")
-    with file_lock(metadata_dir(root) / "maintenance.lock"):
-        _build_index(root, verify=False)
-        with closing(sqlite3.connect(index_path(root))) as connection:
-            yield connection
+    index = index_path(root)
+    for attempt in range(2):
+        with ExitStack() as resources:
+            try:
+                connection = resources.enter_context(closing(sqlite3.connect(index.resolve().as_uri() + "?mode=ro", uri=True)))
+                connection.execute("BEGIN")
+                ready = not FtsIndex.needs_rebuild(connection)
+                if ready:
+                    connection.execute("SELECT path, metadata, content_hash FROM documents LIMIT 1").fetchone()
+            except sqlite3.DatabaseError as error:
+                code = getattr(error, "sqlite_errorcode", 0) & 255
+                if attempt or (index.is_file() and code not in (
+                        sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB, sqlite3.SQLITE_ERROR)):
+                    raise
+            else:
+                if ready:
+                    yield connection
+                    return
+        if not attempt:
+            build_index(root, verify=False)
+    raise ValueError("index could not be opened; run kbc index")
 
 
 def _status(doc: dict, profile, override: dict | None) -> dict:
@@ -117,7 +133,7 @@ def search_page(root, query: str = "", include_inactive: bool = False, *, limit:
         connection.execute("CREATE TEMP TABLE search_paths(path TEXT PRIMARY KEY) WITHOUT ROWID")
         connection.executemany("INSERT INTO search_paths VALUES (?)", ((name,) for name in candidates))
         try:
-            total, rows = FtsIndex(connection).page(query, symbols, limit=page_limit, offset=offset,
+            total, rows = FtsIndex(connection, read_only=True).page(query, symbols, limit=page_limit, offset=offset,
                                                    title_weight=profile.title_weight, body_weight=profile.body_weight)
         except sqlite3.OperationalError as exc:
             if "fts5:" in str(exc) or "syntax error" in str(exc) or "unterminated string" in str(exc) or "no such column" in str(exc):

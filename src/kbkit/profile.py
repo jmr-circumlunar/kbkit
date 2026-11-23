@@ -53,6 +53,8 @@ def matches_prefix(path: str, prefixes: tuple[str, ...]) -> bool:
 @dataclass(frozen=True)
 class Profile:
     warnings: tuple[str, ...] = ()
+    git_remote: str | None = None
+    git_branch: str | None = None
     exclude: tuple[str, ...] = ()
     allow: tuple[str, ...] = ()
     kinds: tuple[str, ...] = ()
@@ -88,13 +90,18 @@ def load_profile(root: Path) -> Profile:
     search = config.get("search", {})
     states = config.get("states", {})
     lint = config.get("lint", {})
-    if any(not isinstance(table, dict) for table in (search, states, lint)):
-        raise ValueError("search, states and lint settings must be TOML tables")
+    git = config.get("git", {})
+    if any(not isinstance(table, dict) for table in (search, states, lint, git)):
+        raise ValueError("search, states, lint and git settings must be TOML tables")
+    remote, branch = git.get("remote"), git.get("branch")
+    if git and any(not isinstance(value, str) or not value.strip() for value in (remote, branch)):
+        raise ValueError("git.remote and git.branch must both be nonempty strings")
     warnings = []
     for table, namespace, known in (
-        (config, "", {"vault_uuid", "schema_version", "search", "states", "lint"}),
+        (config, "", {"vault_uuid", "schema_version", "search", "states", "lint", "git"}),
         (search, "search.", {"exclude", "allow", "kinds", "require_state", "title_weight", "body_weight"}),
         (states, "states.", {"aliases", "inactive"}),
+        (git, "git.", {"remote", "branch"}),
         (lint, "lint.", {"disable", "provenance_kinds", "provenance_fields", "allowed_fields", "tags"}),
     ):
         warnings.extend(f"Unknown profile key: {namespace}{key}" for key in sorted(table.keys() - known))
@@ -128,7 +135,7 @@ def load_profile(root: Path) -> Profile:
 
     warnings.extend(f"Unknown lint rule: {rule}" for rule in sorted(disabled - RULE_IDS))
     return Profile(
-        warnings=tuple(warnings), require_state=require_state,
+        warnings=tuple(warnings), git_remote=remote, git_branch=branch, require_state=require_state,
         provenance_kinds=_strings(lint.get("provenance_kinds", ()), "lint.provenance_kinds"),
         exclude=tuple(map(prefix, _strings(exclude, "search.exclude.prefixes"))),
         allow=tuple(map(prefix, _strings(allow, "search.exclude.allow"))),

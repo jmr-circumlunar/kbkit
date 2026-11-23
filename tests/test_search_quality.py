@@ -22,9 +22,11 @@ class SearchQualityTests(unittest.TestCase):
             hit = app.search("旧版")["hits"][0]
             self.assertIn("旧版连接池复核方案", hit["content"])
             original.write_text("# 实施流程\n\n" + "使用新版连接池复核方案。\n" * 40, encoding="utf-8")
+            app.sync()
             self.assertEqual(app.search("旧版")["hits"], [])
             self.assertEqual([row["path"] for row in app.search("新版")["hits"]], [original.name])
             original.unlink()
+            app.sync()
             self.assertEqual([row["path"] for row in app.search("连接池")["hits"]], [other.name])
 
     def test_chinese_and_identifier_golden_cases(self):

@@ -200,10 +200,10 @@ def _build_index(root: Path, *, verify: bool = True, selected: tuple[str, ...] |
     raise RuntimeError("index recovery did not complete")
 
 
-def build_index(root: Path) -> int:
+def build_index(root: Path, *, verify: bool = True) -> int:
     init_vault(root)
     with file_lock(metadata_dir(root) / "maintenance.lock"):
-        return _build_index(root)
+        return _build_index(root, verify=verify)
 
 
 def maintain(root: Path) -> dict:

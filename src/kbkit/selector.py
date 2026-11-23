@@ -114,7 +114,7 @@ def select(raw: bytes, *, heading=None, block=None, lines=None) -> Selection:
             raise SelectorError("block_id must use a valid block ordinal")
         expected = match[2]
         if expected and not hashlib.sha256(raw).hexdigest().startswith(expected):
-            raise SelectorError("block_id belongs to an earlier document version; repeat kb_search")
+            raise SelectorError("block_id belongs to an earlier document version; run kb_sync and repeat kb_search")
         ranges = blocks(raw)
         ordinal = int(match[1])
         if ordinal >= len(ranges):
