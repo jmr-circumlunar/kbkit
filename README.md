@@ -43,6 +43,10 @@ python -m venv .venv
 
 示例内容在 [knowledge](knowledge/00-索引/工作空间上下文.md)。可将该目录直接作为 Obsidian 仓库打开。安装到当前环境后，kbc 与 `python -m kbkit` 执行相同的命令。
 
+## WorkBuddy
+
+WorkBuddy 使用托管 Python 和本地 CLI。连接器打包、双源校验和手动更新流程见 [WorkBuddy 连接器](integrations/workbuddy/README.md)。
+
 ## 接入 Agent 或已有知识库
 
 `kbc setup <vault> --project <project> --host codex` 会初始化并索引知识库，为指定项目生成 MCP、Skill、常驻查询规则和 SessionStart Hook。将宿主改成 claude 可配置 Claude Code。Agent 启动时可读取明确授权的一篇路由笔记，配置时用 `--context-note` 指定库内路径。示例库默认采用自己的路由笔记。需要手动挂接 MCP 时，执行 `kbc mcp stdio`，并设置 `KBKIT_VAULT` 为知识库绝对路径。

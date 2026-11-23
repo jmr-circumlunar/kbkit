@@ -1,0 +1,22 @@
+{
+  "name": "kbkit 知识库",
+  "name_zh": "kbkit 知识库",
+  "name_en": "kbkit Knowledge Base",
+  "description": "在 WorkBuddy 中搜索、引用和维护本地 Markdown 或 Obsidian 知识库。",
+  "description_zh": "在 WorkBuddy 中搜索、引用和维护本地 Markdown 或 Obsidian 知识库。",
+  "description_en": "Search, cite, and maintain a local Markdown or Obsidian vault from WorkBuddy.",
+  "source": "circumlunar-kbkit",
+  "type": "cli",
+  "version": "1.0.0",
+  "minWorkbuddyVersion": "5.0.0",
+  "examples_zh": [
+    "连接我指定的 Obsidian 知识库",
+    "查知识库里的备份流程，附上来源",
+    "按授权范围运行一次知识库维护"
+  ],
+  "examples_en": [
+    "Connect an Obsidian vault I specify",
+    "Find the vault backup procedure and cite its source",
+    "Run one authorized knowledge maintenance cycle"
+  ]
+}

@@ -36,6 +36,9 @@ jobs:
         run: python tools/eval_retrieval.py
       - name: Runtime doctor
         run: python -m kbkit doctor
+      - name: Build WorkBuddy connector
+        if: matrix.python-version == '3.13'
+        run: python scripts/build_workbuddy.py --output "${{ runner.temp }}/kbkit-workbuddy"
       - name: Build zipapp
         run: python scripts/build_zipapp.py kbkit.pyz
       - name: Verify zipapp
