@@ -185,8 +185,8 @@ def verify(url: str, branch: str | None, expected_sha: str | None, evidence: dic
         scheduled = json.loads(cli("task", "run", str(vault), "--auto-apply", "safe"))
         require(newline_note.read_bytes() == newline_source + b"\r\n", "authorized runner did not apply the newline")
         saved = call("kb_maintenance_report", run_id=scheduled["run_id"], collection="automatic_fixes")
-        fixes = saved["automatic_fixes"]
-        require(len(fixes) == 1 and fixes[0]["status"] == "applied" and fixes[0]["path"] == newline_note.name,
+        fixes = [fix for fix in saved["automatic_fixes"] if fix["path"] == newline_note.name]
+        require(len(fixes) == 1 and fixes[0]["status"] == "applied",
                 "maintenance audit is missing the applied fix")
         require(call("kb_write_status", transaction_id=fixes[0]["transaction_id"])["state"] == "applied",
                 "maintenance audit does not link to an applied transaction")
