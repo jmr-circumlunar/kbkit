@@ -21,7 +21,10 @@ from .prototype_markdown import parse_document
 from .knowledge import KnowledgeVault
 from .selector import blocks as select_blocks, headings, markdown_path, source_lines
 from .code_sync import refresh_code
-from .transaction import digest
+from .profile import load_profile
+from .scheduler import resolve_auto_apply
+from .transaction import PendingTransactionError, digest, find_journal, write_atomic
+from .writer import _apply_proposal_locked, is_automatic_fix
 from .vault_profile import index_path, init_vault
 
 
@@ -182,9 +185,23 @@ def _build_index(root: Path, *, verify: bool = True, selected: tuple[str, ...] |
                         audit.enter_context(state.connection)
                     state.record_event(*fields, commit=False)
 
+                full_verification = verify and selected is None
                 with connection:
                     connection.execute("BEGIN IMMEDIATE")
-                    return _sync_index(root, connection, record_event, verify=verify, selected=selected)
+                    changed = _sync_index(root, connection, record_event, verify=verify, selected=selected)
+                    migrated = full_verification and FtsIndex.compact_path_index(connection)
+                if full_verification:
+                    free_pages = connection.execute("PRAGMA freelist_count").fetchone()[0]
+                    if migrated or free_pages >= 256:
+                        # Avoid delaying concurrent readers for optional disk reclamation.
+                        connection.execute("PRAGMA busy_timeout = 100")
+                        try:
+                            connection.execute("VACUUM")
+                        except sqlite3.OperationalError as error:
+                            if getattr(error, "sqlite_errorcode", 0) & 255 not in (
+                                    sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED, sqlite3.SQLITE_FULL):
+                                raise
+                return changed
         except sqlite3.DatabaseError as error:
             if attempt or getattr(error, "sqlite_errorcode", 0) & 255 not in (sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB):
                 raise
@@ -206,7 +223,43 @@ def build_index(root: Path, *, verify: bool = True) -> int:
         return _build_index(root, verify=verify)
 
 
-def maintain(root: Path) -> dict:
+def _maintain_proposals(root: Path, state: StateStore, findings: list[dict], automatic: bool,
+                        protected: set[str]) -> tuple[int, list[dict]]:
+    fixes = [finding["fix"] for finding in findings if "fix" in finding]
+    expired = state.expire_missing_findings(fixes)
+    candidates = {}
+    if automatic and "FM-FINAL-NEWLINE" not in load_profile(root).disabled_rules:
+        # Reconcile an interrupted application even if its newline is already on disk.
+        for status in ("pending", "approved"):
+            for proposal_id, risk, _, _, raw in state.list_proposals(status):
+                if risk == "low" and find_journal(root, proposal_id) is not None:
+                    fix = json.loads(raw)
+                    if is_automatic_fix(fix) and fix["path"] not in protected:
+                        candidates[proposal_id] = fix
+    for finding in findings:
+        fix = finding.get("fix")
+        if fix is None:
+            continue
+        proposal = state.matching_proposal(finding["message"], fix)
+        if proposal is None:
+            proposal = state.create_proposal("low", finding["message"], fix), "pending"
+        proposal_id, status = proposal
+        if automatic and status != "rejected" and is_automatic_fix(fix):
+            candidates[proposal_id] = fix
+
+    results = []
+    for proposal_id, fix in candidates.items():
+        try:
+            result = _apply_proposal_locked(root, state, proposal_id, automatic=True)
+        except (OSError, ValueError) as error:
+            status = "blocked" if isinstance(error, PendingTransactionError) else "failed"
+            result = {"status": status, "error": str(error), "proposal_id": proposal_id,
+                      "path": fix["path"], "rule": fix["finding_rule"], "before_hash": fix["expected_hash"]}
+        results.append(result)
+    return expired, results
+
+
+def maintain(root: Path, *, auto_apply: str | None = None) -> dict:
     from .consistency import check_consistency
 
     init_vault(root)
@@ -214,35 +267,37 @@ def maintain(root: Path) -> dict:
     with file_lock(lock_path):
         state = StateStore(root)
         run_id = state.start_task("maintenance")
+        report_path = metadata_dir(root) / "reports" / f"{run_id}.json"
+        automatic_fixes = []
         try:
+            mode = resolve_auto_apply(root, auto_apply)
             knowledge = KnowledgeVault(root)
             code_sync = refresh_code(knowledge)
-            blocks = _build_index(root)
-            consistency = check_consistency(root)
             graph = build_graph(root)
             protected = set(knowledge.data["pages"]) | {entry["page"] for entry in knowledge.data["code"].values()}
             findings = lint(root, graph=graph, protected=protected)
-            fixes = [finding["fix"] for finding in findings if "fix" in finding]
-            expired = state.expire_missing_findings(fixes)
-            for finding in findings:
-                if "fix" in finding and not state.has_open_proposal(finding["message"], finding["fix"]):
-                    state.create_proposal("low", finding["message"], finding["fix"])
+            expired, automatic_fixes = _maintain_proposals(root, state, findings, mode == "safe", protected)
+            blocks = _build_index(root)
+            consistency = check_consistency(root)
             with closing(sqlite3.connect(index_path(root))) as connection:
                 indexed_blocks = FtsIndex(connection).count()
-            incomplete = not consistency["ok"] or any(row["status"] in {"conflicted", "unverified"} for row in code_sync)
+            incomplete = (not consistency["ok"] or any(row["status"] in {"conflicted", "unverified"} for row in code_sync)
+                          or any(fix["status"] != "applied" for fix in automatic_fixes))
             status = "partial" if incomplete else "succeeded"
-            report = {"run_id": run_id, "status": status, "blocks": indexed_blocks, "changed_blocks": blocks, "graph": graph, "findings": findings, "expired_proposals": expired, "proposals": state.proposal_page("pending", 1, 0)[0],
-                      "consistency": consistency, "code_sync": code_sync, "knowledge": knowledge.statuses()}
-            report_path = metadata_dir(root) / "reports" / f"{run_id}.json"
-            report_path.parent.mkdir(parents=True, exist_ok=True)
-            report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+            report = {
+                "run_id": run_id, "status": status, "blocks": indexed_blocks, "changed_blocks": blocks,
+                "graph": graph, "findings": findings, "expired_proposals": expired,
+                "proposals": state.proposal_page("pending", 1, 0)[0], "consistency": consistency,
+                "code_sync": code_sync, "knowledge": knowledge.statuses(),
+                "auto_apply": mode, "automatic_fixes": automatic_fixes,
+            }
+            write_atomic(report_path, json.dumps(report, ensure_ascii=False, indent=2).encode("utf-8"))
             state.finish_task(run_id, status, str(report_path))
             return {**report, "report_path": str(report_path)}
         except Exception as exc:
-            state.finish_task(run_id, "failed")
-            report_path = metadata_dir(root) / "reports" / f"{run_id}.json"
-            report_path.parent.mkdir(parents=True, exist_ok=True)
-            report_path.write_text(json.dumps({"run_id": run_id, "status": "failed", "error": str(exc)}), encoding="utf-8")
+            state.finish_task(run_id, "failed", str(report_path))
+            report = {"run_id": run_id, "status": "failed", "error": str(exc), "automatic_fixes": automatic_fixes}
+            write_atomic(report_path, json.dumps(report, ensure_ascii=False, indent=2).encode("utf-8"))
             raise
         finally:
             state.close()

@@ -55,6 +55,10 @@ def contract_samples():
             vault = temp / "vault"
             profile_path = init_vault(vault)
             profile_dir = profile_path.parent
+            with profile_path.open("a", encoding="utf-8") as stream:
+                stream.write('\n[search.exclude]\nprefixes = ["scratch"]\n')
+            (vault / "scratch").mkdir()
+            (vault / "scratch" / "ignored.md").write_text("# Ignored\n", encoding="utf-8")
             profile = tomllib.loads(profile_path.read_text(encoding="utf-8"))
             service = ApplicationService(vault)
             (vault / "sample.md").write_text("# Heading\n\nSample body\n", encoding="utf-8")
@@ -81,10 +85,11 @@ def contract_samples():
                                               plan_hash=responses["kb_write_plan"]["structuredContent"]["plan_hash"])
             responses["kb_write_status"] = call("kb_write_status",
                                                 transaction_id=responses["kb_write_apply"]["structuredContent"]["transaction_id"])
-            responses["kb_maintain"] = call("kb_maintain")
+            call("kb_maintain")
+            responses["kb_proposals"] = call("kb_proposals")
+            responses["kb_maintain"] = call("kb_maintain", auto_apply="safe", collection="automatic_fixes")
             run_id = responses["kb_maintain"]["structuredContent"]["run_id"]
             responses["kb_maintenance_report"] = call("kb_maintenance_report", run_id=run_id, collection="code_sync")
-            responses["kb_proposals"] = call("kb_proposals")
             delete = call("kb_write_apply", operations=[{"operation": "delete", "path": "old.md"}])
             entry_id = delete["structuredContent"]["trash"][0]["entry_id"]
             responses["kb_restore"] = call("kb_restore", entry_id=entry_id)
@@ -147,6 +152,7 @@ def check(sources=SOURCE_DOCS) -> list[str]:
     all_fields |= set(page([], key="hits", limit=1, offset=0, max_bytes=1024))
     all_fields |= journal_states | graph_names | set(FORMATS) | {"main", "true", "false"}
     all_fields |= set(instances(payloads["kb_write_apply"], "state"))
+    all_fields |= set(schemas["kb_maintain"]["properties"]["auto_apply"]["enum"])
     all_fields |= profile.keys() | schemas.keys() | set(OPERATIONS["items"]["properties"]["operation"]["enum"])
     issues = []
     for source in ACTIVE_DESIGN_DOCS:

@@ -284,6 +284,26 @@ inactive = ["paused"]
         self.ok("kb_proposals")
         self.ok("kb_facet", dimension="path")
 
+    def test_outline_reserves_a_hint_and_keeps_the_next_page_reachable(self):
+        from kbkit.paging import json_size
+
+        self.note("headings.md", "".join(f"# Section {number:02} {'标' * 18}\n" for number in range(60)))
+        previous_line = 0
+        offset = 0
+        while offset is not None:
+            page = self.ok("kb_outline", path="headings.md", offset=offset, max_bytes=640)
+            self.assertLessEqual(json_size(page), 640)
+            self.assertEqual(page["outline"][0]["line"], previous_line + 1)
+            previous_line = page["outline"][-1]["line"]
+            offset = page["next_offset"]
+            if page["truncated"]:
+                self.assertIn("next_offset", page["hint"])
+        self.assertEqual(previous_line, 60)
+        self.note("huge-heading.md", "# " + "长" * 400 + "\n")
+        empty_page = self.ok("kb_outline", path="huge-heading.md", max_bytes=512)
+        self.assertEqual(empty_page["next_offset"], 0)
+        self.assertIn("max_bytes", empty_page["hint"])
+
     def test_executable_proposals_and_external_state(self):
         with patch.dict(os.environ, {"KBKIT_HOME": str(self.base / "external")}):
             profile = init_vault(self.root)

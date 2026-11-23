@@ -178,6 +178,22 @@ def verify(url: str, branch: str | None, expected_sha: str | None, evidence: dic
             require({hit["path"] for hit in call("kb_search", query=query)["hits"]} == {"中文.md"},
                     f"unexpected retrieval results for {query}")
         checks["retrieval_golden"] = "passed"
+
+        newline_note = vault / "mechanical.md"
+        newline_source = b"# Maintenance\r\n\r\nMissing final newline"
+        newline_note.write_bytes(newline_source)
+        scheduled = json.loads(cli("task", "run", str(vault), "--auto-apply", "safe"))
+        require(newline_note.read_bytes() == newline_source + b"\r\n", "authorized runner did not apply the newline")
+        saved = call("kb_maintenance_report", run_id=scheduled["run_id"], collection="automatic_fixes")
+        fixes = saved["automatic_fixes"]
+        require(len(fixes) == 1 and fixes[0]["status"] == "applied" and fixes[0]["path"] == newline_note.name,
+                "maintenance audit is missing the applied fix")
+        require(call("kb_write_status", transaction_id=fixes[0]["transaction_id"])["state"] == "applied",
+                "maintenance audit does not link to an applied transaction")
+        require(not call("kb_maintain", auto_apply="safe", collection="automatic_fixes")["automatic_fixes"],
+                "repeated maintenance re-applied the same operation")
+        checks["authorized_maintenance"] = "passed"
+
         skills = {item.parent.name for item in (clone / "skills").glob("*/SKILL.md")}
         require({"kb-install", "kb-onboard", "kb-query", "kb-author", "kb-maintain", "kb-ingest"} <= skills, "missing Skill files")
         evidence["skill_files"] = sorted(skills)

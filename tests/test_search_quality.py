@@ -59,6 +59,23 @@ class SearchQualityTests(unittest.TestCase):
             results = {item["path"]: item["state"] for item in app.search("部署回滚", include_inactive=True)["hits"]}
             self.assertEqual(results, {"ops.md": "active", "archived.md": "archived"})
 
+    def test_full_index_compacts_legacy_lookup_without_changing_retrieval(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            init_vault(root)
+            (root / "note.md").write_text("# 设计复核规则\n", encoding="utf-8")
+            app = ApplicationService(root)
+            expected = app.search("复核")
+            with closing(sqlite3.connect(index_path(root))) as connection, connection:
+                connection.execute("DROP INDEX block_text_path")
+                connection.execute("CREATE INDEX block_text_path ON block_text(path, block_id)")
+            self.assertEqual(app.search("复核"), expected)
+            self.assertEqual(app.index()["blocks"], 0)
+            with closing(sqlite3.connect(index_path(root))) as connection:
+                columns = [row[2] for row in connection.execute("PRAGMA index_info(block_text_path)")]
+            self.assertEqual(columns, ["path"])
+            self.assertEqual(app.search("复核"), expected)
+
     def test_old_fts_index_upgrades_even_when_markdown_unchanged(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

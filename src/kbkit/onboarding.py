@@ -23,8 +23,12 @@ STARTER = "00-索引/工作空间上下文.md"
 BEGIN = "<!-- kbkit: begin -->"
 END = "<!-- kbkit: end -->"
 PREVIOUS_STOCK_SKILLS = {
-    "kb-query": "3243527c2ac5507d14e71a171cc27b1d73868ff379b09c53785d1041b1447c5c",
-    "kb-maintain": "7e94cd30611ea023c31e7f17c1e7cbd55f4deabc704cee51a4ef1eb551912512",
+    "kb-query": {"3243527c2ac5507d14e71a171cc27b1d73868ff379b09c53785d1041b1447c5c"},
+    "kb-install": {"6414a973fe61976aec4df5706038662738052fb29a0f6ab6792be90850569a89"},
+    "kb-maintain": {
+        "7e94cd30611ea023c31e7f17c1e7cbd55f4deabc704cee51a4ef1eb551912512",
+        "2d0ced3c80083f5456fb4a4e09c1b3674ab858bd8cfc2e110831d7ff77a0f4d2",
+    },
 }
 
 
@@ -164,7 +168,8 @@ def _host_files(project: Path, vault: Path, host: str, note: str | None) -> dict
         body = skill["content"].encode("utf-8")
         if target.is_file():
             current = target.read_bytes().replace(b"\r\n", b"\n")
-            if current != body.replace(b"\r\n", b"\n") and sha256(current).hexdigest() != PREVIOUS_STOCK_SKILLS.get(skill["name"]):
+            previous_versions = PREVIOUS_STOCK_SKILLS.get(skill["name"], ())
+            if current != body.replace(b"\r\n", b"\n") and sha256(current).hexdigest() not in previous_versions:
                 continue  # Preserve customized Skills.
         files[target] = body
     return files

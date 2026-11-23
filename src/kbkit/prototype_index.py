@@ -76,13 +76,22 @@ class FtsIndex:
             "block_id TEXT NOT NULL, body BLOB NOT NULL, title TEXT NOT NULL, "
             "line_start INTEGER NOT NULL, line_end INTEGER NOT NULL, heading_path TEXT NOT NULL)"
         )
-        self.connection.execute("CREATE INDEX IF NOT EXISTS block_text_path ON block_text(path, block_id)")
+        self.connection.execute("CREATE INDEX IF NOT EXISTS block_text_path ON block_text(path)")
         self.connection.execute(
             """CREATE VIRTUAL TABLE IF NOT EXISTS blocks USING fts5(
                 path, block_id UNINDEXED, content, han_bigrams, title, han_title_bigrams,
                 content='', tokenize = 'unicode61 tokenchars ''_'''
             )"""
         )
+
+    @staticmethod
+    def compact_path_index(connection: sqlite3.Connection) -> bool:
+        # The block ID repeats the path. Path lookup can filter an individual ID within that document.
+        if len(connection.execute("PRAGMA index_info(block_text_path)").fetchall()) < 2:
+            return False
+        connection.execute("DROP INDEX block_text_path")
+        connection.execute("CREATE INDEX block_text_path ON block_text(path)")
+        return True
 
     def replace_block(self, path: str, block_id: str, content: str, commit: bool = True) -> None:
         self.delete_blocks(path, block_id)
@@ -93,7 +102,7 @@ class FtsIndex:
     def insert_block(self, path: str, block_id: str, content: str, commit: bool = True, *, title: str = "",
                      line_start: int = 1, line_end: int = 1, heading: tuple[str, ...] = ()) -> None:
         raw = content.encode("utf-8")
-        compressed = zlib.compress(raw, level=1)
+        compressed = zlib.compress(raw, level=6)
         body = b"z" + compressed if len(compressed) < len(raw) else b"r" + raw
         row = self.connection.execute(
             "INSERT INTO block_text(path, block_id, body, title, line_start, line_end, heading_path) "

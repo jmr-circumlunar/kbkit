@@ -63,7 +63,10 @@ TOOLS = {
     "kb_facet": Tool("facet", "Count documents by path, kind, state or tags.", obj({"dimension": STRING, "path": TEXT_FILTER, **WINDOW})),
     "kb_graph": Tool("graph", "List one collection of wikilink graph data.", obj({"collection": STRING, "path": STRING, **WINDOW})),
     "kb_lint": Tool("lint", "List deterministic vault findings without applying changes.", obj(WINDOW)),
-    "kb_maintain": Tool("maintain", "Refresh code-bound knowledge and the index, then record governance findings.", obj({**WINDOW, "collection": STRING})),
+    "kb_maintain": Tool("maintain", "Refresh the index and code-bound knowledge, then record findings and authorized mechanical fixes.", obj({
+        **WINDOW, "collection": STRING,
+        "auto_apply": {"type": "string", "enum": ["none", "safe"], "description": "Set safe only for an authorized run."},
+    })),
     "kb_maintenance_report": Tool("maintenance_report", "Read a page of a previously saved maintenance report.",
                                   obj({"run_id": STRING, "collection": STRING, **WINDOW}, "run_id")),
     "kb_proposals": Tool("proposals", "List executable maintenance proposals and their statuses.", obj({"status": STRING, **WINDOW})),

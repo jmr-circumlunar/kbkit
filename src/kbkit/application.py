@@ -27,6 +27,10 @@ from .vault_profile import vault_id
 from .writer import apply_proposal
 
 
+DEFAULT_OUTLINE_BYTES = 2_000
+MAINTENANCE_COLLECTIONS = ("findings", "code_sync", "automatic_fixes")
+
+
 class ApplicationService:
     def __init__(self, vault: Path) -> None:
         self.vault = vault.resolve()
@@ -206,11 +210,11 @@ class ApplicationService:
                       max_bytes=max_bytes, context=context)
         return result
 
-    def maintain(self, limit=25, offset=0, max_bytes=36_000, collection="findings") -> dict:
+    def maintain(self, limit=25, offset=0, max_bytes=36_000, collection="findings", *, auto_apply=None) -> dict:
         limit, offset, max_bytes = window(limit, offset, max_bytes)
-        if collection not in ("findings", "code_sync"):
-            raise ValueError("collection must be findings or code_sync")
-        report = maintain(self.vault)
+        if collection not in MAINTENANCE_COLLECTIONS:
+            raise ValueError("collection must be findings, code_sync or automatic_fixes")
+        report = maintain(self.vault, auto_apply=auto_apply)
         return self._maintenance_page(report, limit, offset, max_bytes, collection)
 
     def maintenance_report(self, run_id, limit=25, offset=0, max_bytes=36_000, collection="findings") -> dict:
@@ -224,16 +228,17 @@ class ApplicationService:
     @staticmethod
     def _maintenance_page(report, limit, offset, max_bytes, collection):
         summary = {key: report[key] for key in (
-            "run_id", "status", "blocks", "changed_blocks", "proposals", "expired_proposals", "report_path"
+            "run_id", "status", "blocks", "changed_blocks", "proposals", "expired_proposals", "report_path", "auto_apply"
         ) if key in report}
         summary["code_sync_counts"] = dict(Counter(row["status"] for row in report.get("code_sync", [])))
+        summary["automatic_fix_counts"] = dict(Counter(row["status"] for row in report.get("automatic_fixes", [])))
         if "consistency" in report:
             summary["index_consistent"] = report["consistency"]["ok"]
         summary["graph_counts"] = {key: len(report["graph"][key]) for key in ("nodes", "edges", "broken")} if "graph" in report else {}
         if "error" in report:
             summary["error"] = str(report["error"])[:500]
-        if collection not in ("findings", "code_sync"):
-            raise ValueError("collection must be findings or code_sync")
+        if collection not in MAINTENANCE_COLLECTIONS:
+            raise ValueError("collection must be findings, code_sync or automatic_fixes")
         return page(report.get(collection, []), key=collection, context=summary,
                     limit=limit, offset=offset, max_bytes=max_bytes)
 
@@ -305,15 +310,10 @@ class ApplicationService:
     def _outline(raw, relative, limit, offset, max_bytes):
         items = [{"level": h.level, "title": h.path[-1], "heading_path": list(h.path),
                   "line": h.start + 1, "lines": [h.start + 1, h.end]} for h in headings(raw)]
-        result = page(items, key="outline", limit=limit, offset=offset, max_bytes=max_bytes,
-                      context={"path": relative})
-        if result["outline"] and result["truncated"]:
-            hint = "Use next_offset for the remaining headings."
-            if json_size({**result, "hint": hint}) <= max_bytes:
-                result["hint"] = hint
-        return result
+        return page(items, key="outline", limit=limit, offset=offset, max_bytes=max_bytes,
+                    context={"path": relative}, continuation_hint="Use next_offset.")
 
-    def outline(self, path: str, limit=8, offset=0, max_bytes=640) -> dict:
+    def outline(self, path: str, limit=8, offset=0, max_bytes=DEFAULT_OUTLINE_BYTES) -> dict:
         limit, offset, max_bytes = window(limit, offset, max_bytes)
         target = markdown_path(self.vault, path)
         return self._outline(target.read_bytes(), target.relative_to(self.vault).as_posix(), limit, offset, max_bytes)

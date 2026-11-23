@@ -123,19 +123,21 @@ class StateStore:
     def get_proposal(self, proposal_id: str) -> tuple | None:
         return self.connection.execute("SELECT proposal_id, risk_level, reason, status, payload FROM proposals WHERE proposal_id = ?", (proposal_id,)).fetchone()
 
-    def has_open_proposal(self, reason: str, payload: dict) -> bool:
+    def matching_proposal(self, reason: str, payload: dict) -> tuple[str, str] | None:
         encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         rows = self.connection.execute(
-            "SELECT payload FROM proposals WHERE reason = ? AND status IN ('pending', 'approved')",
+            "SELECT proposal_id, status, payload FROM proposals "
+            "WHERE reason = ? AND status IN ('pending', 'approved', 'rejected') "
+            "ORDER BY status = 'rejected' DESC, rowid DESC",
             (reason,),
         )
-        for (stored,) in rows:
+        for proposal_id, status, stored in rows:
             try:
                 if json.dumps(json.loads(stored), ensure_ascii=False, sort_keys=True, separators=(",", ":")) == encoded:
-                    return True
+                    return proposal_id, status
             except json.JSONDecodeError:
                 continue
-        return False
+        return None
 
     def expire_missing_findings(self, active_fixes: list[dict]) -> int:
         """Retire old diagnostic rows and fixes whose source has changed."""

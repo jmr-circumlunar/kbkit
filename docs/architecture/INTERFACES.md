@@ -32,18 +32,18 @@ stdio 使用 UTF-8。服务协商 `2025-11-25` 或 `2025-06-18`。每条工具�
 
 ### 检索与导航
 
-配置 `search.require_state = true` 会将没有状态的旧笔记标为 unknown。显式查默认排除区时，设置 `include_excluded` 并提供明确的 `path`。若还需要已归档或失效内容，同时设置 `include_inactive`。
+配置 `search.require_state = true` 会将没有状态的旧笔记标为 unknown。显式查默认排除区时，设置 `include_excluded` 并提供明确的 `path`。若还需要已归档或失效内容，同时设置 `include_inactive`。排除规则限制检索和分面。按已知路径读取、标题导航以及全库索引与巡检仍覆盖这些笔记。状态返回 `excluded_documents` 和未命中前缀的警告。
 
 - `kb_search` 支持 `query`、`path`、`kind`、`state`、`tags`、`symbols`、`exclude` 和 `include_inactive`。`path` 和 `kind` 多值为 OR，`tags` 和 `symbols` 多值为 AND。前缀按目录边界匹配。显式选定某个非活跃状态时，该状态可参与检索。符号过滤区分大小写。非法枚举通过 `KB_QUERY_ENUM_INVALID` 返回有效选项。
 - 搜索默认 `limit=8`，最大 50。`max_chars` 默认 1200，`budget_chars` 可限制整页正文字符数。`select` 支持 `snippet`、`path`、`full`、`json`。`full` 从命中块开头取正文，仍受字符和字节预算限制。`total_candidates` 是应用过滤后、分页前的块数。
 - 搜索命中提供 `path`、`block_id`、`heading_path`、`lines`、`line_start`、`line_end`、`vault_id`、`state`、`stale`、`score`。正文模式提供 `content`、`content_truncated` 和 `hit_line`。行号从 1 开始，两端均包含。`score` 为反向 BM25，越大越靠前。
 - `kb_read` 按 `path` 读源文件，或提供 `heading`（如 `["设计", "边界"]`）、`block_id` 或 `lines`（如 `[12, 18]`）。凭 `block_id` 可省略路径。搜索返回的块 ID 绑定文件版本，源文件发生外部改动后先同步再重新检索获取 ID。大文件的整篇请求返回章节预览和建议行区间。显式范围过长时，以 `next_lines` 续读。单行超限时，`line_truncated` 和 `hint` 会说明如何读取。
-- `kb_outline` 返回标题树及行区间。`kb_facet` 默认预览四个维度；按 `path`、`kind`、`state` 或 `tags` 单独查看完整分布。`kb_graph` 的 `collection` 支持 `edges`、`broken`、`nodes`、`backlinks`、`orphaned`。可用 `path` 将图限定到一篇笔记。
+- `kb_outline` 返回标题树及行区间，默认至多 8 项和 2,000 字节。截断时按 `next_offset` 续页。若首项超出预算，提示提高 `max_bytes`。`kb_facet` 默认预览四个维度；按 `path`、`kind`、`state` 或 `tags` 单独查看完整分布。`kb_graph` 的 `collection` 支持 `edges`、`broken`、`nodes`、`backlinks`、`orphaned`。可用 `path` 将图限定到一篇笔记。
 
 ### 同步与配置诊断
 
 - 会话开始时执行一次本地增量同步。会话中的搜索和分面读取现有索引，缺失或可识别的不兼容索引会自动重建。kbkit 自身的事务写入会更新相关文件的索引。
-- 如果用户在会话中直接编辑了 Markdown，调用 kb_sync 或运行 kbc sync <vault>。没有会话 Hook 的宿主可以在首次需要知识库时调用一次本地同步。定时维护与 kbc index <vault> 会校验正文哈希。
+- 如果用户在会话中直接编辑了 Markdown，调用 kb_sync 或运行 kbc sync <vault>。没有会话 Hook 的宿主可以在首次需要知识库时调用一次本地同步。定时维护与 kbc index <vault> 会校验正文哈希，并更新精简的路径辅助索引，在有足够空闲页时归还磁盘空间。
 - 配置无效时，状态接口返回诊断和修复提示。检索等需要有效配置的操作应等配置修正后再执行，以保留原来的过滤约束。
 
 知识库自己可选用 Git。仓库根目录设为 vault 根目录，事先配置可信远端与对应本地分支，并把 .kbkit 元数据外置或加入 Git 忽略规则。首次授权后在 profile.toml 设置：
@@ -60,7 +60,7 @@ branch = "main"
 
 集合工具接受 `limit`、`offset`、`max_bytes`，返回 `total`、`truncated` 和可用时的 `next_offset`。按偏移量翻页时保持过滤条件一致。若一个条目超出预算，可以提高 `max_bytes` 或选择更短表示。
 
-`kb_maintain` 运行一次维护并保存全量本地报告。使用 `run_id` 调用 `kb_maintenance_report` 翻页，无需重新运行维护。两者的 `collection` 可选 `findings` 或 `code_sync`。`kb_proposals` 只列出具有执行操作的提案。自动刷新代码绑定页的记录在 `code_sync`。
+`kb_maintain` 运行一次维护并保存全量本地报告。使用 `run_id` 调用 `kb_maintenance_report` 翻页，无需重新运行维护。两者的 `collection` 可选 `findings`、`code_sync` 或 `automatic_fixes`。`kb_proposals` 只列出具有执行操作的提案。发现列表记录扫描时的状态，`automatic_fixes` 记录自动应用结果、事务 ID、前后哈希和追加的换行。自动修复失败时运行报告部分成功。
 
 ### 写入与恢复
 
@@ -105,7 +105,8 @@ allowed_fields = ["product", "project"]
 
 <!-- kbkit-contract input kb_search query path kind state tags symbols exclude limit offset max_chars max_bytes -->
 <!-- kbkit-contract output kb_search hits total_candidates vault_id path block_id heading_path lines line_start line_end score stale hit_line -->
-<!-- kbkit-contract output kb_status initialized indexed_blocks excluded_paths source_state_counts unknown_state_counts -->
+<!-- kbkit-contract output kb_status initialized indexed_blocks excluded_paths excluded_documents source_state_counts unknown_state_counts -->
+<!-- kbkit-contract output kb_maintain automatic_fixes automatic_fix_counts before_hash after_hash transaction_id -->
 <!-- kbkit-contract output kb_write_plan plan_hash before_hash preview position -->
 <!-- kbkit-contract output kb_write_apply positions trash entry_id index_dirty -->
 <!-- kbkit-contract state kb_write_apply applied pending divergent -->

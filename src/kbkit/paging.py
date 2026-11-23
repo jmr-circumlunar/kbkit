@@ -26,9 +26,12 @@ def window(limit: int, offset: int, max_bytes: int) -> tuple[int, int, int]:
 
 def page(items, *, key: str, limit: int, offset: int, max_bytes: int,
          total: int | None = None, presliced: bool = False, context: dict | None = None,
-         item_overhead=None) -> dict:
+         item_overhead=None, continuation_hint: str | None = None) -> dict:
     total = len(items) if total is None else total
     result = {**(context or {}), key: [], "total": total, "truncated": True, "next_offset": offset}
+    empty_hint = "Increase max_bytes or request a shorter representation."
+    if continuation_hint and offset < total:
+        result["hint"] = continuation_hint
     size = json_size(result) + 16
     for item in islice(items, 0 if presliced else offset, limit if presliced else offset + limit):
         size += json_size(item) + 1 + (item_overhead(item) if item_overhead else 0)
@@ -38,9 +41,12 @@ def page(items, *, key: str, limit: int, offset: int, max_bytes: int,
     next_offset = offset + len(result[key])
     result["truncated"] = next_offset < total
     result["next_offset"] = next_offset if result["truncated"] else None
-    if result["truncated"] and not result[key]:
-        hint = "Increase max_bytes or request a shorter representation."
-        if json_size(result) + json_size(hint) + 8 <= max_bytes:
-            result["hint"] = hint
+    if not result["truncated"] and continuation_hint:
+        result.pop("hint", None)
+    elif result["truncated"] and not result[key]:
+        if continuation_hint:
+            result["hint"] = "Increase max_bytes."
+        elif json_size(result) + json_size(empty_hint) + 8 <= max_bytes:
+            result["hint"] = empty_hint
     return result
 

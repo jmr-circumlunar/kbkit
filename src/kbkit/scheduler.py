@@ -7,6 +7,7 @@ import uuid
 from pathlib import Path
 
 from .storage import metadata_dir
+from .transaction import write_atomic
 
 
 def configure(
@@ -37,11 +38,27 @@ def configure(
         "generated_root": generated_root,
         "version": 1,
     }
-    config.parent.mkdir(parents=True, exist_ok=True)
-    config.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    write_atomic(config, json.dumps(record, indent=2).encode("utf-8"))
     return record
 
 
 def load(root: Path) -> dict | None:
     config = metadata_dir(root) / "automation.json"
-    return json.loads(config.read_text(encoding="utf-8")) if config.exists() else None
+    try:
+        record = json.loads(config.read_bytes())
+    except FileNotFoundError:
+        return None
+    if not isinstance(record, dict) or type(record.get("enabled")) is not bool:
+        raise ValueError("automation.json must contain a boolean enabled setting")
+    if record.get("auto_apply") not in ("none", "safe"):
+        raise ValueError("automation.json auto_apply must be 'none' or 'safe'")
+    return record
+
+
+def resolve_auto_apply(root: Path, override: str | None) -> str:
+    if override is not None:
+        if override not in ("none", "safe"):
+            raise ValueError("auto_apply must be 'none' or 'safe'")
+        return override
+    record = load(root)
+    return record["auto_apply"] if record and record["enabled"] else "none"

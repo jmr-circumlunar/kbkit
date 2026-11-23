@@ -15,7 +15,7 @@ from pathlib import Path
 from zipfile import BadZipFile
 
 from . import __version__
-from .application import ApplicationService
+from .application import ApplicationService, DEFAULT_OUTLINE_BYTES, MAINTENANCE_COLLECTIONS
 from .backup import create_backup, restore_backup, verify_backup
 from .code_sync import bind_code
 from .core import init_vault
@@ -83,7 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
         if name in {"search", "status", "outline", "graph", "lint", "task", "maintain", "proposal"}:
             command.add_argument("--limit", type=int, default=8 if name in {"search", "outline"} else 25)
             command.add_argument("--offset", type=int, default=0)
-            command.add_argument("--max-bytes", type=int, default=640 if name == "outline" else 36_000)
+            command.add_argument("--max-bytes", type=int, default=DEFAULT_OUTLINE_BYTES if name == "outline" else 36_000)
         if name == "sync":
             command.add_argument("--git", action="store_true", help="Fetch the configured vault branch and fast-forward it.")
         if name == "search":
@@ -106,7 +106,9 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument("--collection", choices=["edges", "broken", "nodes", "backlinks", "orphaned"], default="edges")
             command.add_argument("--note")
         if name in {"task", "maintain"}:
-            command.add_argument("--collection", choices=["findings", "code_sync"], default="findings")
+            command.add_argument("--collection", choices=MAINTENANCE_COLLECTIONS, default="findings")
+            command.add_argument("--auto-apply", choices=["none", "safe"],
+                                 help="Apply authorized mechanical fixes, or override with none.")
         if name == "proposal":
             command.add_argument("proposal_id", nargs="?")
             command.add_argument("--status")
@@ -266,7 +268,7 @@ def _vault_command(args) -> int:
     elif name == "proposal":
         result = _proposal(service, args, window)
     elif name in {"task", "maintain"}:
-        result = service.maintain(collection=args.collection, **window)
+        result = service.maintain(collection=args.collection, auto_apply=args.auto_apply, **window)
         _json(result)
         return int(result["status"] != "succeeded")
     elif name == "recover":
